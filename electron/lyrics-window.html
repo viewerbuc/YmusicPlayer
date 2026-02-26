@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Desktop Lyrics</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Hiragino Kaku Gothic ProN", "Apple SD Gothic Neo", "Microsoft YaHei", "Meiryo", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+        user-select: none;
+      }
+      .wrap {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px;
+      }
+      .panel {
+        position: relative;
+        width: 100%;
+        border-radius: 18px;
+        padding: 18px 24px;
+        -webkit-app-region: drag;
+        border: 0.5px solid transparent;
+        background: rgba(255, 255, 255, 0);
+        backdrop-filter: blur(0px) saturate(120%);
+        box-shadow: none;
+        transition: all 180ms ease-out;
+      }
+      .panel:hover {
+        border-color: rgba(255, 255, 255, 0.2);
+        background: rgba(35, 35, 35, 0.4);
+        backdrop-filter: blur(22px) saturate(150%);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 12px 24px rgba(0,0,0,.2);
+      }
+      .min-btn {
+        position: absolute;
+        right: 10px;
+        top: 8px;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        border: 0.5px solid rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(240, 245, 255, 0.9);
+        line-height: 18px;
+        font-size: 16px;
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+        opacity: 0;
+        transition: opacity 180ms ease-out, background 180ms ease-out;
+      }
+      .panel:hover .min-btn {
+        opacity: 1;
+      }
+      .min-btn:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+      .line1, .line2 {
+        text-align: center;
+        text-shadow: 0 2px 12px rgba(0, 0, 0, .45);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .line1 {
+        min-height: 48px;
+        font-size: 38px;
+        line-height: 1.24;
+        font-weight: 650;
+        color: #eaf2ff;
+      }
+      .line2 {
+        min-height: 38px;
+        margin-top: 4px;
+        font-size: 30px;
+        line-height: 1.26;
+        color: rgba(237, 242, 255, 0.72);
+      }
+      .empty {
+        text-align: center;
+        font-size: 22px;
+        color: rgba(230,235,245,.75);
+      }
+      .line1, .line2, .empty {
+        scrollbar-width: thin;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="panel" id="panel">
+        <button class="min-btn" id="minBtn" title="最小化歌词窗">-</button>
+        <div class="line1" id="line1">...</div>
+        <div class="line2" id="line2"> </div>
+        <div class="empty" id="empty" style="display:none;">未找到可用歌词</div>
+      </div>
+    </div>
+    <script>
+      const line1 = document.getElementById('line1');
+      const line2 = document.getElementById('line2');
+      const empty = document.getElementById('empty');
+      const minBtn = document.getElementById('minBtn');
+
+      minBtn?.addEventListener('click', () => {
+        window.lyricAPI?.minimizeWindow?.();
+      });
+
+      window.lyricAPI?.onUpdate((payload) => {
+        const current = (payload?.current || '').trim();
+        const next = (payload?.next || '').trim();
+        const has = !!payload?.hasLyrics;
+
+        if (!has) {
+          line1.style.display = 'none';
+          line2.style.display = 'none';
+          empty.style.display = 'block';
+          return;
+        }
+
+        empty.style.display = 'none';
+        line1.style.display = 'block';
+        line2.style.display = 'block';
+        line1.textContent = current || '...';
+        line2.textContent = next || ' ';
+      });
+    </script>
+  </body>
+</html>

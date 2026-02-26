@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 10% -20%, rgba(130, 170, 255, 0.22), transparent 60%),
+    radial-gradient(1000px 500px at 100% 0%, rgba(152, 218, 255, 0.2), transparent 60%),
+    linear-gradient(180deg, #f4f6fb 0%, #e9edf5 100%);
+}
+
+.dark body {
+  background:
+    radial-gradient(1000px 500px at 10% -20%, rgba(52, 83, 141, 0.28), transparent 60%),
+    radial-gradient(1200px 600px at 100% 0%, rgba(32, 60, 118, 0.26), transparent 62%),
+    linear-gradient(180deg, #101218 0%, #0a0d12 100%);
+}
+
+.noise-layer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.015;
+  background-image:
+    radial-gradient(circle at 20% 20%, #000 0.5px, transparent 0.7px),
+    radial-gradient(circle at 80% 30%, #000 0.4px, transparent 0.7px),
+    radial-gradient(circle at 40% 70%, #000 0.45px, transparent 0.75px);
+  background-size: 3px 3px, 4px 4px, 5px 5px;
+  mix-blend-mode: soft-light;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.apple-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 128, 145, 0.28) transparent;
+}
+
+.apple-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.apple-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.apple-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  background-color: rgba(118, 126, 145, 0.24);
+  transition: background-color 160ms ease-out;
+}
+
+.apple-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(96, 106, 128, 0.42);
+}
+
+.dark .apple-scroll {
+  scrollbar-color: rgba(205, 214, 235, 0.22) transparent;
+}
+
+.dark .apple-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(208, 218, 240, 0.2);
+}
+
+.dark .apple-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(226, 234, 255, 0.36);
+}
+
+.apple-pointer {
+  cursor: pointer;
+}
+
+.dark .apple-pointer {
+  cursor: pointer;
+}
