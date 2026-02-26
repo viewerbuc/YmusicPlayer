@@ -7,6 +7,11 @@
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
     "build": "vite build",
+    "dist:renderer": "vite build",
+    "dist:win": "npm run dist:renderer && electron-builder --win nsis --x64",
+    "dist:linux": "npm run dist:renderer && electron-builder --linux AppImage deb --x64",
+    "dist:mac": "npm run dist:renderer && electron-builder --mac dmg --universal",
+    "dist:all": "npm run dist:renderer && electron-builder --win nsis --x64 --linux AppImage deb --x64 --mac dmg --universal",
     "preview": "vite preview",
     "start": "electron ."
   },
@@ -23,9 +28,58 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
     "electron": "^34.0.0",
+    "electron-builder": "^25.1.8",
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "vite": "^6.0.11",
     "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "com.eric.ymusicplayer",
+    "productName": "YMusicPlayer",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "AudioVideo",
+      "icon": "public/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.music",
+      "icon": "public/icon.png"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ]
   }
 }
