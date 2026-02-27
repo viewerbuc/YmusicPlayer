@@ -1,7 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
-const { existsSync } = require('fs');
+const { existsSync, mkdirSync, appendFileSync } = require('fs');
 const { execFile } = require('child_process');
 const mm = require('music-metadata');
 
@@ -17,7 +17,65 @@ let lyricWindowOptions = {
   locked: false,
   clickThrough: false
 };
+let mainLogFile = '';
 const appIconPath = path.join(__dirname, '..', 'public', 'icon.png');
+
+function logMain(level, message, extra) {
+  const ts = new Date().toISOString();
+  const detail = extra ? ` ${JSON.stringify(extra)}` : '';
+  const line = `[${ts}] [${level}] ${message}${detail}`;
+  console.log(line);
+  if (!mainLogFile) return;
+  try {
+    appendFileSync(mainLogFile, `${line}\n`, 'utf8');
+  } catch (_) {
+    // ignore file logging errors
+  }
+}
+
+function initMainLogger() {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    mkdirSync(dir, { recursive: true });
+    mainLogFile = path.join(dir, 'main.log');
+    logMain('INFO', 'logger initialized', {
+      logFile: mainLogFile,
+      platform: process.platform,
+      arch: process.arch,
+      electron: process.versions.electron,
+      node: process.versions.node,
+      packaged: app.isPackaged
+    });
+  } catch (err) {
+    console.error('[logger] init failed', err);
+  }
+}
+
+function attachMainWindowDebugHooks(win) {
+  if (!win) return;
+  win.webContents.on('did-start-loading', () => {
+    logMain('INFO', 'main webContents did-start-loading');
+  });
+  win.webContents.on('did-finish-load', () => {
+    logMain('INFO', 'main webContents did-finish-load', { url: win.webContents.getURL() });
+  });
+  win.webContents.on('did-fail-load', (_, code, desc, url, isMainFrame) => {
+    logMain('ERROR', 'main webContents did-fail-load', { code, desc, url, isMainFrame });
+  });
+  win.webContents.on('render-process-gone', (_, details) => {
+    logMain('ERROR', 'main webContents render-process-gone', details || {});
+  });
+  win.webContents.on('console-message', (_, level, message, line, sourceId) => {
+    if (level <= 1) return;
+    logMain('WARN', 'renderer console-message', { level, message, line, sourceId });
+  });
+  win.on('unresponsive', () => {
+    logMain('ERROR', 'main window unresponsive');
+  });
+  win.on('responsive', () => {
+    logMain('INFO', 'main window responsive');
+  });
+}
 
 function execFileAsync(cmd, args) {
   return new Promise((resolve, reject) => {
@@ -263,14 +321,25 @@ function createWindow() {
       nodeIntegration: false
     }
   });
+  attachMainWindowDebugHooks(mainWindow);
 
   const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
   if (!app.isPackaged) {
-    mainWindow.loadURL(devUrl);
+    mainWindow.loadURL(devUrl).catch((err) => {
+      logMain('ERROR', 'loadURL failed in dev mode', { devUrl, error: err?.message || String(err) });
+    });
   } else {
     const prodIndex = path.join(__dirname, '..', 'dist', 'index.html');
-    if (existsSync(prodIndex)) mainWindow.loadFile(prodIndex);
-    else mainWindow.loadURL(devUrl);
+    if (existsSync(prodIndex)) {
+      mainWindow.loadFile(prodIndex).catch((err) => {
+        logMain('ERROR', 'loadFile failed in packaged mode', { prodIndex, error: err?.message || String(err) });
+      });
+    } else {
+      logMain('WARN', 'dist index not found, fallback to dev url', { prodIndex, devUrl });
+      mainWindow.loadURL(devUrl).catch((err) => {
+        logMain('ERROR', 'fallback loadURL failed in packaged mode', { devUrl, error: err?.message || String(err) });
+      });
+    }
   }
   mainWindow.setMenuBarVisibility(false);
   mainWindow.on('close', (e) => {
@@ -423,11 +492,22 @@ async function handleMainCloseRequest() {
 }
 
 app.whenReady().then(() => {
+  initMainLogger();
+  logMain('INFO', 'app ready');
   Menu.setApplicationMenu(null);
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+process.on('uncaughtException', (err) => {
+  logMain('ERROR', 'uncaughtException', { error: err?.stack || err?.message || String(err) });
+});
+
+process.on('unhandledRejection', (reason) => {
+  const text = reason?.stack || reason?.message || String(reason);
+  logMain('ERROR', 'unhandledRejection', { error: text });
 });
 
 app.on('before-quit', () => {
