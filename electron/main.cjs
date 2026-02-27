@@ -264,8 +264,12 @@ function createWindow() {
     }
   });
 
-  const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
-  mainWindow.loadURL(devUrl);
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  if (devUrl) {
+    mainWindow.loadURL(devUrl);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  }
   mainWindow.setMenuBarVisibility(false);
   mainWindow.on('close', (e) => {
     if (isQuitting) return;
