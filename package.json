@@ -67,6 +67,7 @@
       "target": [
         "dmg"
       ],
+      "identity": null,
       "category": "public.app-category.music",
       "icon": "public/icon.png"
     },
