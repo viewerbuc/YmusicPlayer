@@ -155,6 +155,7 @@ function App() {
 
   const audioRef = useRef(null);
   const panelLyricsScrollRef = useRef(null);
+  const sourceSwitchingRef = useRef(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -251,40 +252,50 @@ function App() {
     const loadSource = async () => {
       const audio = audioRef.current;
       if (!audio || !currentTrack || !electronAPI?.readAudioBuffer) return;
-      const raw = await electronAPI.readAudioBuffer(currentTrack.path);
-      if (canceled) return;
-      if (!raw) {
-        setPlayError('该歌曲无法读取或解码');
-        setIsPlaying(false);
-        return;
-      }
-      const payload = raw?.data ?? raw;
-      const mime = raw?.kind === 'wav-transcoded' ? 'audio/wav' : (MIME_BY_EXT[currentTrack.ext] || 'audio/mpeg');
-      const bytes = payload?.type === 'Buffer' && Array.isArray(payload.data)
-        ? new Uint8Array(payload.data)
-        : payload instanceof Uint8Array
-          ? payload
-          : new Uint8Array(payload);
-      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
-      const prevUrl = audio.dataset.blobUrl;
-      if (prevUrl) URL.revokeObjectURL(prevUrl);
-      audio.dataset.blobUrl = blobUrl;
-      audio.src = blobUrl;
-      audio.currentTime = 0;
-      setTime(0);
-      setTrackDuration(currentTrack.duration || 0);
-      setPlayError(
-        raw?.kind === 'wav-transcoded'
-          ? 'WMA 已自动转码播放'
-          : raw?.kind === 'wma-raw'
-            ? '检测到 WMA 原始流，若无法播放请安装 ffmpeg'
-            : ''
-      );
-      if (isPlaying) {
-        audio.play().catch(() => {
-          setPlayError('当前格式暂不支持播放');
+      sourceSwitchingRef.current = true;
+      try {
+        const raw = await electronAPI.readAudioBuffer(currentTrack.path);
+        if (canceled) return;
+        if (!raw) {
+          setPlayError('该歌曲无法读取或解码');
           setIsPlaying(false);
-        });
+          return;
+        }
+        const payload = raw?.data ?? raw;
+        const mime = raw?.kind === 'wav-transcoded' ? 'audio/wav' : (MIME_BY_EXT[currentTrack.ext] || 'audio/mpeg');
+        const bytes = payload?.type === 'Buffer' && Array.isArray(payload.data)
+          ? new Uint8Array(payload.data)
+          : payload instanceof Uint8Array
+            ? payload
+            : new Uint8Array(payload);
+        const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        const prevUrl = audio.dataset.blobUrl;
+        if (prevUrl) URL.revokeObjectURL(prevUrl);
+        audio.dataset.blobUrl = blobUrl;
+        audio.pause();
+        audio.src = blobUrl;
+        audio.load();
+        audio.currentTime = 0;
+        setTime(0);
+        setTrackDuration(currentTrack.duration || 0);
+        setPlayError(
+          raw?.kind === 'wav-transcoded'
+            ? 'WMA 已自动转码播放'
+            : raw?.kind === 'wma-raw'
+              ? '检测到 WMA 原始流，若无法播放请安装 ffmpeg'
+              : ''
+        );
+        if (isPlaying) {
+          await audio.play().catch(() => {
+            setPlayError('当前格式暂不支持播放');
+            setIsPlaying(false);
+          });
+        }
+      } catch (_) {
+        setPlayError('音频读取失败，请尝试重新扫描');
+        setIsPlaying(false);
+      } finally {
+        sourceSwitchingRef.current = false;
       }
     };
     loadSource();
@@ -295,6 +306,7 @@ function App() {
         URL.revokeObjectURL(prevUrl);
         if (audio) delete audio.dataset.blobUrl;
       }
+      sourceSwitchingRef.current = false;
       canceled = true;
     };
   }, [currentTrackId]);
@@ -302,6 +314,7 @@ function App() {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    if (sourceSwitchingRef.current) return;
     if (isPlaying) {
       audio.play().catch(() => {
         setPlayError('当前格式暂不支持播放');
@@ -672,8 +685,14 @@ function App() {
     <div className="h-full w-full p-0 text-black/85 dark:text-white/90">
       <audio
         ref={audioRef}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPlay={() => {
+          if (sourceSwitchingRef.current) return;
+          setIsPlaying(true);
+        }}
+        onPause={() => {
+          if (sourceSwitchingRef.current) return;
+          setIsPlaying(false);
+        }}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime || 0)}
         onLoadedMetadata={(e) => setTrackDuration(e.currentTarget.duration || currentTrack?.duration || 0)}
         onEnded={playNext}
