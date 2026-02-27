@@ -264,11 +264,13 @@ function createWindow() {
     }
   });
 
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devUrl) {
+  const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
+  if (!app.isPackaged) {
     mainWindow.loadURL(devUrl);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    const prodIndex = path.join(__dirname, '..', 'dist', 'index.html');
+    if (existsSync(prodIndex)) mainWindow.loadFile(prodIndex);
+    else mainWindow.loadURL(devUrl);
   }
   mainWindow.setMenuBarVisibility(false);
   mainWindow.on('close', (e) => {
