@@ -2,7 +2,10 @@
   "name": "ymusicplayer",
   "version": "0.1.0",
   "description": "Cross-platform local music player built with Electron + React",
-  "author": "Eric",
+  "author": {
+    "name": "Eric",
+    "email": "erickent1995@gmail.com"
+  },
   "private": true,
   "main": "electron/main.cjs",
   "type": "module",
@@ -10,10 +13,10 @@
     "dev": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
     "build": "vite build",
     "dist:renderer": "vite build",
-    "dist:win": "npm run dist:renderer && electron-builder --win nsis --x64",
-    "dist:linux": "npm run dist:renderer && electron-builder --linux AppImage deb --x64",
-    "dist:mac": "npm run dist:renderer && electron-builder --mac dmg --universal",
-    "dist:all": "npm run dist:renderer && electron-builder --win nsis --x64 --linux AppImage deb --x64 --mac dmg --universal",
+    "dist:win": "npm run dist:renderer && electron-builder --publish never --win nsis --x64",
+    "dist:linux": "npm run dist:renderer && electron-builder --publish never --linux AppImage deb --x64",
+    "dist:mac": "npm run dist:renderer && electron-builder --publish never --mac dmg --universal",
+    "dist:all": "npm run dist:renderer && electron-builder --publish never --win nsis --x64 --linux AppImage deb --x64 --mac dmg --universal",
     "preview": "vite preview",
     "start": "electron ."
   },
@@ -56,6 +59,7 @@
         "AppImage",
         "deb"
       ],
+      "maintainer": "Eric <erickent1995@gmail.com>",
       "category": "AudioVideo",
       "icon": "public/icon.png"
     },
@@ -76,12 +80,6 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "releaseType": "release"
-      }
-    ]
+    }
   }
 }
