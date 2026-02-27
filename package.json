@@ -13,10 +13,10 @@
     "dev": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
     "build": "vite build --base=./",
     "dist:renderer": "vite build --base=./",
-    "dist:win": "npm run dist:renderer && electron-builder --publish never --win nsis --x64",
+    "dist:win": "npm run dist:renderer && electron-builder --publish never --win nsis",
     "dist:linux": "npm run dist:renderer && electron-builder --publish never --linux AppImage deb --x64",
     "dist:mac": "npm run dist:renderer && electron-builder --publish never --mac dmg --universal",
-    "dist:all": "npm run dist:renderer && electron-builder --publish never --win nsis --x64 --linux AppImage deb --x64 --mac dmg --universal",
+    "dist:all": "npm run dist:renderer && electron-builder --publish never --win nsis --linux AppImage deb --x64 --mac dmg --universal",
     "preview": "vite preview",
     "start": "electron ."
   },
@@ -72,11 +72,18 @@
     },
     "win": {
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
       ],
       "icon": "public/icon.png"
     },
     "nsis": {
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
