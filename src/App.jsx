@@ -19,6 +19,7 @@ import {
   Settings2,
   ChevronDown,
   Disc3,
+  Volume2,
   Moon,
   Sun
 } from 'lucide-react';
@@ -37,7 +38,9 @@ const DEFAULT_DATA = {
     lyricClickThrough: false,
     closeBehavior: 'ask',
     backgroundImagePath: '',
-    backgroundBlur: 8
+    backgroundBlur: 8,
+    volume: 0.8,
+    lyricEncodingMap: {}
   }
 };
 
@@ -61,15 +64,18 @@ function formatDuration(seconds) {
 
 function parseLyrics(raw) {
   if (!raw) return [];
-  return raw
+  const text = `${raw}`.replace(/^\uFEFF/, '');
+  return text
     .split(/\r?\n/)
-    .map((line) => {
-      const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
-      if (!m) return null;
-      const time = Number(m[1]) * 60 + Number(m[2]);
-      return { time, text: (m[3] || '').trim() };
+    .flatMap((line) => {
+      const matches = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+      if (!matches.length) return [];
+      const content = line.replace(/\[(\d+):(\d+(?:\.\d+)?)\]/g, '').trim();
+      return matches.map((m) => {
+        const time = Number(m[1]) * 60 + Number(m[2]);
+        return { time, text: content };
+      });
     })
-    .filter(Boolean)
     .sort((a, b) => a.time - b.time);
 }
 
@@ -152,6 +158,15 @@ function App() {
   const [bgDataUrl, setBgDataUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playerPanelOpen, setPlayerPanelOpen] = useState(false);
+  const [currentCoverDataUrl, setCurrentCoverDataUrl] = useState('');
+  const [lyricDebugPath, setLyricDebugPath] = useState('');
+  const [encodingMenuOpen, setEncodingMenuOpen] = useState(false);
+  const [closeBehaviorMenuOpen, setCloseBehaviorMenuOpen] = useState(false);
+  const [lyricOffsetSec, setLyricOffsetSec] = useState(0);
+  const [lyricAdjustMode, setLyricAdjustMode] = useState(false);
+  const [holdLyricIdx, setHoldLyricIdx] = useState(null);
+  const [lyricLines, setLyricLines] = useState([]);
+  const [lyricAlignNotice, setLyricAlignNotice] = useState('');
 
   const audioRef = useRef(null);
   const panelLyricsScrollRef = useRef(null);
@@ -169,7 +184,6 @@ function App() {
       }
       const saved = await electronAPI.loadData();
       setData(saved);
-      if (saved.tracks.length) setCurrentTrackId(saved.tracks[0].id);
       setLoaded(true);
     };
     load();
@@ -185,6 +199,18 @@ function App() {
 
   useEffect(() => {
     const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, []);
+
+  useEffect(() => {
+    const close = () => setEncodingMenuOpen(false);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, []);
+
+  useEffect(() => {
+    const close = () => setCloseBehaviorMenuOpen(false);
     window.addEventListener('click', close);
     return () => window.removeEventListener('click', close);
   }, []);
@@ -243,9 +269,23 @@ function App() {
   const trackMap = useMemo(() => new Map(uniqueTracks.map((t) => [t.id, t])), [uniqueTracks]);
   const currentTrack = currentTrackId ? trackMap.get(currentTrackId) : null;
   const playMode = data.settings.playMode;
-  const lyricsEnabled = data.settings.showLyrics && (!mini || data.settings.minimizedShowLyrics);
+  const lyricsEnabled = !!currentTrack && isPlaying && data.settings.showLyrics && (!mini || data.settings.minimizedShowLyrics);
   const floatingLyricsEnabled = lyricsEnabled && !playerPanelOpen;
   const bgBlur = Number.isFinite(Number(data.settings.backgroundBlur)) ? Number(data.settings.backgroundBlur) : 8;
+  const volume = Math.max(0, Math.min(1, Number.isFinite(Number(data.settings.volume)) ? Number(data.settings.volume) : 0.8));
+  const lyricEncoding = currentTrackId ? (data.settings.lyricEncodingMap?.[currentTrackId] || 'auto') : 'auto';
+  const adjustedLyricTime = time + lyricOffsetSec;
+  const encodingLabelMap = {
+    auto: '编码: 自动',
+    'utf-8': 'UTF-8',
+    gb18030: 'GB18030',
+    gbk: 'GBK',
+    shift_jis: 'Shift_JIS',
+    'euc-kr': 'EUC-KR',
+    'utf-16le': 'UTF-16LE',
+    'utf-16be': 'UTF-16BE'
+  };
+  const encodingOptions = Object.entries(encodingLabelMap);
 
   useEffect(() => {
     let canceled = false;
@@ -275,6 +315,7 @@ function App() {
         audio.pause();
         audio.src = blobUrl;
         audio.load();
+        audio.volume = volume;
         audio.currentTime = 0;
         setTime(0);
         setTrackDuration(currentTrack.duration || 0);
@@ -314,6 +355,12 @@ function App() {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    audio.volume = volume;
+  }, [volume]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
     if (sourceSwitchingRef.current) return;
     if (isPlaying) {
       audio.play().catch(() => {
@@ -326,31 +373,78 @@ function App() {
 
   useEffect(() => {
     const loadLyrics = async () => {
-      if (!currentTrack?.lyricPath || !electronAPI?.readTextFile) {
+      if (!currentTrack?.path || !electronAPI?.readTextFile) {
         setLyricsRaw('');
+        setLyricLines([]);
         return;
       }
-      const txt = await electronAPI.readTextFile(currentTrack.lyricPath);
-      setLyricsRaw(txt || '');
+      const candidates = [];
+      if (currentTrack.lyricPath) candidates.push(currentTrack.lyricPath);
+      const dot = currentTrack.path.lastIndexOf('.');
+      const base = dot > 0 ? currentTrack.path.slice(0, dot) : currentTrack.path;
+      candidates.push(`${base}.lrc`, `${base}.LRC`, `${base}.txt`, `${base}.TXT`);
+      const uniqueCandidates = [...new Set(candidates)];
+      for (const lyricPath of uniqueCandidates) {
+        const txt = electronAPI.readTextFileWithEncoding
+          ? await electronAPI.readTextFileWithEncoding(lyricPath, lyricEncoding)
+          : await electronAPI.readTextFile(lyricPath);
+        if (!txt) continue;
+        const parsed = parseLyrics(txt);
+        if (parsed.length > 0) {
+          setLyricDebugPath(lyricPath);
+          setLyricsRaw(txt);
+          setLyricLines(parsed);
+          return;
+        }
+      }
+      setLyricDebugPath(uniqueCandidates[0] || '');
+      setLyricsRaw('');
+      setLyricLines([]);
     };
     loadLyrics();
-  }, [currentTrack?.lyricPath]);
+  }, [currentTrack?.lyricPath, currentTrack?.path, lyricEncoding]);
 
-  const lyricLines = useMemo(() => parseLyrics(lyricsRaw), [lyricsRaw]);
+  useEffect(() => {
+    setLyricOffsetSec(0);
+    setLyricAdjustMode(false);
+    setHoldLyricIdx(null);
+    setLyricAlignNotice('');
+  }, [currentTrackId]);
+
+  useEffect(() => {
+    let canceled = false;
+    const loadCover = async () => {
+      if (!currentTrack?.path || !electronAPI?.readTrackCoverDataUrl) {
+        setCurrentCoverDataUrl('');
+        return;
+      }
+      const dataUrl = await electronAPI.readTrackCoverDataUrl(currentTrack.path);
+      if (!canceled) setCurrentCoverDataUrl(dataUrl || '');
+    };
+    loadCover();
+    return () => {
+      canceled = true;
+    };
+  }, [currentTrack?.path]);
 
   const activeLyricIdx = useMemo(() => {
     if (!lyricLines.length) return -1;
     for (let i = lyricLines.length - 1; i >= 0; i -= 1) {
-      if (time >= lyricLines[i].time) return i;
+      if (adjustedLyricTime >= lyricLines[i].time) return i;
     }
     return -1;
-  }, [lyricLines, time]);
+  }, [lyricLines, adjustedLyricTime]);
 
   const currentLyricLine = useMemo(() => {
     if (!lyricLines.length) return '';
     if (activeLyricIdx < 0) return lyricLines[0]?.text || '';
     return lyricLines[activeLyricIdx]?.text || '';
   }, [lyricLines, activeLyricIdx]);
+
+  const heldLyricLineText = useMemo(() => {
+    if (holdLyricIdx == null) return '';
+    return lyricLines[holdLyricIdx]?.text || '';
+  }, [holdLyricIdx, lyricLines]);
 
   const nextLyricLine = useMemo(() => {
     if (!lyricLines.length) return '';
@@ -409,6 +503,9 @@ function App() {
 
   const playTrack = (id) => {
     setCurrentTrackId(id);
+    setLyricAdjustMode(false);
+    setHoldLyricIdx(null);
+    setLyricOffsetSec(0);
     setIsPlaying(true);
   };
 
@@ -563,7 +660,6 @@ function App() {
     try {
       const scanned = await electronAPI.scanFolders(merged);
       setData(scanned);
-      if (!currentTrackId && scanned.tracks.length) setCurrentTrackId(scanned.tracks[0].id);
     } finally {
       setScanBusy(false);
     }
@@ -575,7 +671,6 @@ function App() {
     try {
       const scanned = await electronAPI.scanFolders(data.scanFolders || []);
       setData(scanned);
-      if (!currentTrackId && scanned.tracks.length) setCurrentTrackId(scanned.tracks[0].id);
     } finally {
       setScanBusy(false);
     }
@@ -601,7 +696,107 @@ function App() {
     if (!electronAPI) return;
     const fresh = await electronAPI.rescanTrack(track.path);
     setData((prev) => ({ ...prev, tracks: prev.tracks.map((t) => (t.id === fresh.id ? { ...fresh, liked: t.liked } : t)) }));
+    return fresh;
   };
+
+  const openLyricFinder = () => {
+    if (!currentTrack || !electronAPI?.openLyricFinderWindow) return;
+    const keyword = `${currentTrack.artist || ''} - ${currentTrack.title || ''}`.trim();
+    const searchUrl = `https://www.toomic.com/?search=${encodeURIComponent(keyword)}`;
+    electronAPI.openLyricFinderWindow({
+      url: searchUrl,
+      trackPath: currentTrack.path
+    });
+  };
+
+  const adjustLyricOffset = (delta) => {
+    setLyricOffsetSec((v) => {
+      const next = Math.max(-30, Math.min(30, Number((v + delta).toFixed(2))));
+      return next;
+    });
+    const audio = audioRef.current;
+    if (audio) {
+      setTime(audio.currentTime || 0);
+    }
+  };
+
+  const saveLyricOffsetToFile = async () => {
+    if (!electronAPI?.writeTextFile || !lyricDebugPath || !lyricLines.length) return;
+    const shiftedLines = lyricLines.map((line) => ({
+      ...line,
+      time: Math.max(0, line.time - lyricOffsetSec)
+    }));
+    const toLrc = shiftedLines
+      .map((line) => {
+        const ms = Math.round(line.time * 1000);
+        const mm = Math.floor(ms / 60000);
+        const sec = (ms - mm * 60000) / 1000;
+        return `[${String(mm).padStart(2, '0')}:${sec.toFixed(3).padStart(6, '0')}]${line.text || ''}`;
+      })
+      .join('\n');
+    const ok = await electronAPI.writeTextFile(lyricDebugPath, toLrc);
+    if (!ok) {
+      setPlayError('歌词偏移保存失败');
+      return;
+    }
+    setLyricsRaw(toLrc);
+    setLyricLines(shiftedLines);
+    setLyricOffsetSec(0);
+    setLyricAdjustMode(false);
+    setHoldLyricIdx(null);
+    setPlayError('');
+  };
+
+  const applyAlignAtCurrent = (idx) => {
+    let appliedDelta = 0;
+    setLyricLines((prev) => {
+      if (!prev.length || idx < 0 || idx >= prev.length) return prev;
+      const currentAtRelease = (audioRef.current?.currentTime ?? time) + lyricOffsetSec;
+      const roundedCurrent = Math.max(0, Math.round(currentAtRelease * 10) / 10);
+      const base = prev[idx].time;
+      const minTarget = idx > 0 ? prev[idx - 1].time + 0.1 : 0;
+      const target = Math.max(minTarget, roundedCurrent);
+      const delta = target - base;
+      if (Math.abs(delta) < 0.001) return prev;
+      appliedDelta = delta;
+      return prev.map((line, i) => (i < idx ? line : { ...line, time: Math.max(0, line.time + delta) }));
+    });
+    if (Math.abs(appliedDelta) >= 0.001) {
+      const sign = appliedDelta > 0 ? '+' : '';
+      setLyricAlignNotice(`已调整：从该句开始整体 ${sign}${appliedDelta.toFixed(1)}s`);
+    } else {
+      setLyricAlignNotice('已调整：该句时间无需变化');
+    }
+  };
+
+  useEffect(() => {
+    if (!lyricAlignNotice) return;
+    const t = setTimeout(() => setLyricAlignNotice(''), 2400);
+    return () => clearTimeout(t);
+  }, [lyricAlignNotice]);
+
+  useEffect(() => {
+    if (!electronAPI?.onLyricDownloaded) return;
+    const off = electronAPI.onLyricDownloaded(async (payload) => {
+      if (!payload?.ok || !payload?.trackPath) {
+        setPlayError('歌词下载失败，请重试');
+        return;
+      }
+      const fresh = await electronAPI.rescanTrack(payload.trackPath);
+      if (fresh?.id) {
+        setData((prev) => ({ ...prev, tracks: prev.tracks.map((t) => (t.id === fresh.id ? { ...fresh, liked: t.liked } : t)) }));
+      }
+      if (currentTrack?.path === payload.trackPath && fresh?.lyricPath && electronAPI.readTextFile) {
+        const txt = await electronAPI.readTextFile(fresh.lyricPath);
+        setLyricsRaw(txt || '');
+        setLyricLines(parseLyrics(txt || ''));
+      }
+      setPlayError('');
+    });
+    return () => {
+      if (typeof off === 'function') off();
+    };
+  }, [currentTrack?.path]);
 
   const displayTracks = useMemo(
     () => sortedTracks.filter((t) => trackMatchesTokens(t, queryTokens)),
@@ -640,13 +835,13 @@ function App() {
   const activePanelLyricId = activeLyricIdx >= 0 ? `panel-lyric-${activeLyricIdx}` : '';
 
   useEffect(() => {
-    if (!playerPanelOpen || !activePanelLyricId) return;
+    if (!playerPanelOpen || !activePanelLyricId || holdLyricIdx != null) return;
     const scroller = panelLyricsScrollRef.current;
     const el = document.getElementById(activePanelLyricId);
     if (!scroller || !el) return;
     const nextTop = Math.max(0, el.offsetTop - scroller.clientHeight * 0.45);
     scroller.scrollTo({ top: nextTop, behavior: 'smooth' });
-  }, [activePanelLyricId, playerPanelOpen, currentTrackId]);
+  }, [activePanelLyricId, playerPanelOpen, currentTrackId, lyricOffsetSec, holdLyricIdx]);
 
   const renderRow = (track, rowKey) => {
     const isActive = currentTrackId === track.id;
@@ -706,18 +901,18 @@ function App() {
         {!!bgDataUrl && (
           <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
             <div
-              className="absolute inset-0 bg-cover bg-center opacity-[0.16] dark:opacity-[0.14] transition-opacity duration-200"
+              className="absolute inset-0 bg-cover bg-center opacity-[0.16] dark:opacity-[0.06] transition-opacity duration-200"
               style={{ backgroundImage: `url("${bgDataUrl}")` }}
             />
             <div
               className="absolute inset-[-10%] bg-cover bg-center"
               style={{
                 backgroundImage: `url("${bgDataUrl}")`,
-                filter: `blur(${Math.max(0, bgBlur * 1.6)}px) saturate(112%) brightness(0.98)`,
+                filter: `blur(${Math.max(0, bgBlur * 1.6)}px) saturate(108%) brightness(${dark ? 0.62 : 0.98}) contrast(${dark ? 0.92 : 1})`,
                 transform: 'scale(1.1)'
               }}
             />
-            <div className="absolute inset-0 bg-white/8 dark:bg-black/10" />
+            <div className="absolute inset-0 bg-white/8 dark:bg-black/38" />
           </div>
         )}
         <div className="absolute left-4 top-3 flex items-center gap-2 z-20">
@@ -884,37 +1079,175 @@ function App() {
                 >
                   <div className="flex h-full flex-col p-5">
                     <div className="relative z-10 flex shrink-0 items-center justify-between">
-                      <button
-                        className="rounded-md p-2 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15"
-                        onClick={() => setPlayerPanelOpen(false)}
-                        title="收起"
-                      >
-                        <ChevronDown size={18} />
-                      </button>
-                      <div className="text-right">
-                        <div className="text-lg tracking-tight font-medium">{currentTrack.title}</div>
-                        <div className="text-sm text-black/55 dark:text-white/65">{currentTrack.artist} · {currentTrack.album}</div>
+                      <div className="relative z-20 flex items-center gap-2">
+                        <button
+                          className="no-drag rounded-lg p-3 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15"
+                          onClick={() => setPlayerPanelOpen(false)}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          title="收起"
+                        >
+                          <ChevronDown size={22} />
+                        </button>
+                        {!!lyricLines.length && (
+                          <button
+                            className="no-drag rounded-lg px-4 py-2 text-sm font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15"
+                            onClick={openLyricFinder}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            title="查找并导入歌词"
+                          >
+                            查找歌词
+                          </button>
+                        )}
+                        <div className="relative no-drag" onMouseDown={(e) => e.stopPropagation()}>
+                          <button
+                            className="no-drag rounded-lg px-3 py-2 text-sm bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEncodingMenuOpen((v) => !v);
+                            }}
+                            title="歌词编码"
+                          >
+                            {encodingLabelMap[lyricEncoding] || '编码: 自动'}
+                          </button>
+                          {encodingMenuOpen && (
+                            <div
+                              className="absolute left-0 top-[calc(100%+6px)] z-30 w-44 rounded-lg border border-black/10 dark:border-white/15 bg-white/95 dark:bg-[#2a2a2a]/95 backdrop-blur-xl shadow-xl overflow-hidden"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {encodingOptions.map(([value, label]) => (
+                                <button
+                                  key={value}
+                                  className={`w-full text-left px-3 py-2 text-sm ${
+                                    lyricEncoding === value
+                                      ? 'bg-[#007aff] text-white'
+                                      : 'text-black/85 dark:text-white/90 hover:bg-black/5 dark:hover:bg-white/10'
+                                  }`}
+                                  onClick={() => {
+                                    if (!currentTrackId) return;
+                                    setData((prev) => ({
+                                      ...prev,
+                                      settings: {
+                                        ...prev.settings,
+                                        lyricEncodingMap: {
+                                          ...(prev.settings.lyricEncodingMap || {}),
+                                          [currentTrackId]: value
+                                        }
+                                      }
+                                    }));
+                                    setEncodingMenuOpen(false);
+                                  }}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="no-drag flex items-center gap-1 rounded-lg px-2 py-1.5 bg-black/5 dark:bg-white/10" onMouseDown={(e) => e.stopPropagation()}>
+                          <button
+                            className={`rounded-md px-2 py-1 text-xs ${lyricAdjustMode ? 'bg-[#007aff] text-white' : 'hover:bg-black/10 dark:hover:bg-white/15'}`}
+                            onClick={() => {
+                              setLyricAdjustMode((v) => !v);
+                              setHoldLyricIdx(null);
+                              setLyricAlignNotice('');
+                            }}
+                            title="调整歌词：点一下按住，再点一下放开并生效"
+                          >
+                            调整歌词 {lyricAdjustMode ? '开' : '关'}
+                          </button>
+                          <button
+                            className="rounded-md px-2 py-1 text-xs hover:bg-black/10 dark:hover:bg-white/15"
+                            onClick={() => adjustLyricOffset(-0.5)}
+                            title="歌词延后 0.5 秒"
+                          >
+                            延后
+                          </button>
+                          <div className="w-16 text-center text-xs text-black/70 dark:text-white/75">
+                            {lyricOffsetSec > 0 ? `+${lyricOffsetSec.toFixed(1)}` : lyricOffsetSec.toFixed(1)}s
+                          </div>
+                          <button
+                            className="rounded-md px-2 py-1 text-xs hover:bg-black/10 dark:hover:bg-white/15"
+                            onClick={() => adjustLyricOffset(0.5)}
+                            title="歌词提前 0.5 秒"
+                          >
+                            提前
+                          </button>
+                          <button
+                            className={`rounded-md px-2 py-1 text-xs ${lyricDebugPath && lyricLines.length ? 'bg-[#007aff] text-white' : 'bg-black/5 dark:bg-white/10 text-black/45 dark:text-white/45'}`}
+                            disabled={!lyricDebugPath || !lyricLines.length}
+                            onClick={saveLyricOffsetToFile}
+                            title="保存当前偏移到 LRC 文件"
+                          >
+                            保存到LRC
+                          </button>
+                        </div>
                       </div>
+                      {(lyricAdjustMode || lyricAlignNotice) && (
+                        <div className="mt-2 px-2 text-xs">
+                          {lyricAlignNotice ? (
+                            <div className="text-[#007aff] dark:text-[#8ec1ff]">{lyricAlignNotice}</div>
+                          ) : holdLyricIdx != null ? (
+                            <div className="text-black/65 dark:text-white/72">
+                              已按住第 {holdLyricIdx + 1} 句：{heldLyricLineText || '...'}。再次点击同一句即可放开并在当前位置生效
+                            </div>
+                          ) : (
+                            <div className="text-black/55 dark:text-white/62">调整歌词已开启：点一下某句按住，到目标播放时间再点一次该句放开并生效</div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    <div className="mt-4 grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] gap-5">
-                      <div className="relative flex h-full flex-col items-center justify-center rounded-2xl bg-white/16 dark:bg-white/8 p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.32)]">
-                        <motion.div
-                          animate={isPlaying ? { rotate: 360 } : { rotate: 0 }}
-                          transition={isPlaying ? { repeat: Infinity, duration: 6, ease: 'linear' } : { duration: 0.2 }}
-                          className="mb-3"
-                        >
-                          <Disc3 size={72} className="text-black/65 dark:text-white/80" />
-                        </motion.div>
-                        <div className="px-3 text-center text-base font-medium text-black/85 dark:text-white/90">{currentTrack.title}</div>
-                        <div className="mt-1 px-3 text-center text-sm text-black/58 dark:text-white/68">{currentTrack.artist}</div>
+                    <div className="mt-4 grid min-h-0 flex-1 grid-cols-[190px_minmax(0,1fr)] gap-4">
+                      <div className="flex min-h-0 flex-col justify-start">
+                        <div className="relative mx-auto w-[170px] overflow-hidden rounded-2xl border border-black/8 dark:border-white/12 bg-white/22 dark:bg-white/8 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.28)]">
+                          <div className="aspect-square w-full">
+                            {currentCoverDataUrl ? (
+                              <img
+                                src={currentCoverDataUrl}
+                                alt="cover"
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center">
+                                <motion.div
+                                  animate={isPlaying ? { rotate: 360 } : { rotate: 0 }}
+                                  transition={isPlaying ? { repeat: Infinity, duration: 6, ease: 'linear' } : { duration: 0.2 }}
+                                >
+                                  <Disc3 size={64} className="text-black/65 dark:text-white/80" />
+                                </motion.div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-3 px-2 text-center text-sm text-black/60 dark:text-white/65 truncate">{currentTrack.album}</div>
                       </div>
 
-                      <div className="min-h-0 pr-1">
-                        <div ref={panelLyricsScrollRef} className="apple-scroll h-full overflow-auto">
+                      <div className="min-h-0 pr-1 flex flex-col">
+                        <div className="shrink-0 px-2 pb-2">
+                          <div className="text-[30px] leading-tight tracking-tight font-semibold">{currentTrack.title}</div>
+                          <div className="mt-1 text-[19px] leading-snug text-black/60 dark:text-white/68">{currentTrack.artist} · {currentTrack.album}</div>
+                          {!!lyricDebugPath && (
+                            <div className="mt-1 text-[11px] text-black/45 dark:text-white/45 truncate" title={lyricDebugPath}>
+                              歌词文件: {lyricDebugPath}
+                            </div>
+                          )}
+                        </div>
+                        <div ref={panelLyricsScrollRef} className="apple-scroll min-h-0 flex-1 overflow-auto">
                           {!lyricLines.length && (
-                            <div className="h-full flex items-center justify-center text-sm text-black/45 dark:text-white/45">
-                              未找到可用歌词
+                            <div className="h-full flex flex-col items-center justify-center gap-4 text-sm text-black/45 dark:text-white/45">
+                              <div>未找到可用歌词</div>
+                              {!!lyricsRaw && (
+                                <pre className="max-w-[90%] max-h-28 overflow-auto text-[11px] text-left whitespace-pre-wrap bg-black/5 dark:bg-white/10 rounded-md p-2">
+                                  {lyricsRaw.split(/\r?\n/).slice(0, 4).join('\n')}
+                                </pre>
+                              )}
+                              <button
+                                className="no-drag rounded-lg px-5 py-2.5 text-lg font-medium bg-black/6 dark:bg-white/12 hover:bg-black/10 dark:hover:bg-white/18 text-black/80 dark:text-white/90"
+                                onClick={openLyricFinder}
+                                onMouseDown={(e) => e.stopPropagation()}
+                              >
+                                查找歌词
+                              </button>
                             </div>
                           )}
                           {!!lyricLines.length && (
@@ -924,12 +1257,34 @@ function App() {
                                   key={`${line.time}-${idx}`}
                                   id={`panel-lyric-${idx}`}
                                   className={`px-2 py-1.5 text-[15px] ${
+                                    holdLyricIdx === idx ? 'bg-[#007aff]/20 rounded-md ring-1 ring-[#007aff]/40' : ''
+                                  } ${
                                     idx === activeLyricIdx
                                       ? 'text-[#0069e5] dark:text-[#9accff] font-semibold'
                                       : 'text-black/62 dark:text-white/62'
                                   }`}
+                                  onClick={(e) => {
+                                    if (!lyricAdjustMode) return;
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    if (holdLyricIdx == null) {
+                                      setHoldLyricIdx(idx);
+                                      setLyricAlignNotice('已按住这句歌词');
+                                      return;
+                                    }
+                                    if (holdLyricIdx === idx) {
+                                      applyAlignAtCurrent(idx);
+                                      setHoldLyricIdx(null);
+                                      return;
+                                    }
+                                    setHoldLyricIdx(idx);
+                                    setLyricAlignNotice('已切换按住目标歌词');
+                                  }}
                                 >
-                                  {line.text || '...'}
+                                  <span>{line.text || '...'}</span>
+                                  {holdLyricIdx === idx && (
+                                    <span className="ml-2 text-[11px] text-[#007aff] dark:text-[#9accff]">按住中，再点一次生效</span>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -995,6 +1350,23 @@ function App() {
                     className="h-1.5 flex-1 appearance-none rounded-full bg-black/10 dark:bg-white/15 accent-[#007aff]"
                   />
                   <span className="w-10 text-xs text-black/50 dark:text-white/50">{formatDuration(trackDuration || currentTrack?.duration || 0)}</span>
+                  <div className="ml-2 flex items-center gap-2 rounded-md px-2 py-1 bg-black/5 dark:bg-white/10">
+                    <Volume2 size={14} className="text-black/55 dark:text-white/60" />
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={Math.round(volume * 100)}
+                      onChange={(e) => {
+                        const next = Math.max(0, Math.min(100, Number(e.target.value)));
+                        setData((prev) => ({ ...prev, settings: { ...prev.settings, volume: next / 100 } }));
+                      }}
+                      className="h-1.5 w-24 appearance-none rounded-full bg-black/10 dark:bg-white/15 accent-[#007aff]"
+                      title="音量"
+                    />
+                    <span className="w-9 text-right text-[11px] text-black/55 dark:text-white/60">{Math.round(volume * 100)}%</span>
+                  </div>
                 </div>
                 {playError && (
                   <div className="mt-1 text-xs text-red-500">{playError}</div>
@@ -1101,20 +1473,51 @@ function App() {
 
                 <section className="rounded-xl p-3 bg-black/[0.03] dark:bg-white/[0.06]">
                   <div className="mb-1 text-xs text-black/60 dark:text-white/70">关闭按钮行为</div>
-                  <select
-                    value={data.settings.closeBehavior || 'ask'}
-                    onChange={(e) =>
-                      setData((prev) => ({
-                        ...prev,
-                        settings: { ...prev.settings, closeBehavior: e.target.value }
-                      }))
-                    }
-                    className="w-full rounded-[5px] px-2 py-1.5 text-xs bg-white dark:bg-white/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)] outline-none focus:ring-4 focus:ring-blue-500/20"
-                  >
-                    <option value="ask">每次询问</option>
-                    <option value="tray">最小化到托盘</option>
-                    <option value="exit">直接关闭</option>
-                  </select>
+                  <div className="relative no-drag" onMouseDown={(e) => e.stopPropagation()}>
+                    <button
+                      className="w-full rounded-[5px] px-2 py-1.5 text-xs text-left bg-white dark:bg-white/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)] hover:bg-black/5 dark:hover:bg-white/15"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCloseBehaviorMenuOpen((v) => !v);
+                      }}
+                    >
+                      {data.settings.closeBehavior === 'tray'
+                        ? '最小化到托盘'
+                        : data.settings.closeBehavior === 'exit'
+                          ? '直接关闭'
+                          : '每次询问'}
+                    </button>
+                    {closeBehaviorMenuOpen && (
+                      <div
+                        className="absolute left-0 top-[calc(100%+6px)] z-30 w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/95 dark:bg-[#2a2a2a]/95 backdrop-blur-xl shadow-xl overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {[
+                          ['ask', '每次询问'],
+                          ['tray', '最小化到托盘'],
+                          ['exit', '直接关闭']
+                        ].map(([value, label]) => (
+                          <button
+                            key={value}
+                            className={`w-full text-left px-3 py-2 text-xs ${
+                              (data.settings.closeBehavior || 'ask') === value
+                                ? 'bg-[#007aff] text-white'
+                                : 'text-black/85 dark:text-white/90 hover:bg-black/5 dark:hover:bg-white/10'
+                            }`}
+                            onClick={() => {
+                              setData((prev) => ({
+                                ...prev,
+                                settings: { ...prev.settings, closeBehavior: value }
+                              }));
+                              setCloseBehaviorMenuOpen(false);
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </section>
               </div>
             </motion.div>

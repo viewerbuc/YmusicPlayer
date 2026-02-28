@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' data: blob: file: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; frame-src https:;"
+    />
+    <title>歌词查找</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
+      }
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #121212;
+      }
+      .root {
+        height: 100%;
+        display: grid;
+        grid-template-rows: 48px 1fr;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(28, 28, 28, 0.92);
+      }
+      .btn {
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.9);
+        cursor: pointer;
+      }
+      .btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .url {
+        flex: 1;
+        min-width: 0;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      webview {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #111;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="bar">
+        <button id="back" class="btn" title="后退">←</button>
+        <button id="forward" class="btn" title="前进">→</button>
+        <button id="reload" class="btn" title="刷新">⟳</button>
+        <div id="url" class="url">https://www.toomic.com/</div>
+      </div>
+      <webview id="view" src="https://www.toomic.com/" allowpopups></webview>
+    </div>
+    <script>
+      const view = document.getElementById('view');
+      const backBtn = document.getElementById('back');
+      const forwardBtn = document.getElementById('forward');
+      const reloadBtn = document.getElementById('reload');
+      const urlNode = document.getElementById('url');
+
+      const syncNavState = () => {
+        backBtn.disabled = !view.canGoBack();
+        forwardBtn.disabled = !view.canGoForward();
+        const currentUrl = view.getURL?.() || view.src || '';
+        urlNode.textContent = currentUrl || 'about:blank';
+      };
+
+      backBtn.addEventListener('click', () => {
+        if (view.canGoBack()) view.goBack();
+      });
+      forwardBtn.addEventListener('click', () => {
+        if (view.canGoForward()) view.goForward();
+      });
+      reloadBtn.addEventListener('click', () => {
+        view.reload();
+      });
+
+      view.addEventListener('did-start-loading', syncNavState);
+      view.addEventListener('did-stop-loading', syncNavState);
+      view.addEventListener('did-navigate', syncNavState);
+      view.addEventListener('did-navigate-in-page', syncNavState);
+      view.addEventListener('new-window', (e) => {
+        if (!e?.url) return;
+        e.preventDefault?.();
+        view.loadURL(e.url);
+      });
+
+      window.lyricFinderAPI?.onOpenUrl((url) => {
+        if (!url) return;
+        view.loadURL(url);
+      });
+
+      syncNavState();
+    </script>
+  </body>
+</html>

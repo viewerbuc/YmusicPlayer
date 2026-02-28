@@ -49,7 +49,14 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "public/icon.png",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "public/icon.png",
+        "to": "icon.png"
+      }
     ],
     "extraMetadata": {
       "main": "electron/main.cjs"

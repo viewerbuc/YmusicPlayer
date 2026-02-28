@@ -10,6 +10,7 @@ const LYRIC_EXT = new Set(['.lrc', '.txt']);
 
 let mainWindow;
 let lyricWindow;
+let lyricFinderWindow;
 let appTray = null;
 let isQuitting = false;
 let isHandlingClose = false;
@@ -18,7 +19,18 @@ let lyricWindowOptions = {
   clickThrough: false
 };
 let mainLogFile = '';
-const appIconPath = path.join(__dirname, '..', 'public', 'icon.png');
+const coverDataUrlCache = new Map();
+let lyricDownloadTarget = null;
+const hookedSessions = new WeakSet();
+
+function resolveAppIconPath() {
+  const candidates = [
+    path.join(process.resourcesPath || '', 'icon.png'),
+    path.join(__dirname, '..', 'public', 'icon.png'),
+    path.join(__dirname, '..', 'icon.png')
+  ].filter(Boolean);
+  return candidates.find((p) => existsSync(p)) || candidates[candidates.length - 1];
+}
 
 function logMain(level, message, extra) {
   const ts = new Date().toISOString();
@@ -51,6 +63,31 @@ function initMainLogger() {
   }
 }
 
+function getTrackCoverCacheKey(filePath) {
+  return normalizeId(filePath || '');
+}
+
+async function readTrackCoverDataUrl(filePath) {
+  try {
+    if (!filePath || !existsSync(filePath)) return null;
+    const cacheKey = getTrackCoverCacheKey(filePath);
+    if (coverDataUrlCache.has(cacheKey)) return coverDataUrlCache.get(cacheKey);
+    const metadata = await mm.parseFile(filePath, { skipCovers: false });
+    const pic = metadata?.common?.picture?.[0];
+    if (!pic?.data?.length) {
+      coverDataUrlCache.set(cacheKey, null);
+      return null;
+    }
+    const fmt = `${pic.format || ''}`.toLowerCase();
+    const mime = fmt.includes('png') ? 'image/png' : 'image/jpeg';
+    const dataUrl = `data:${mime};base64,${Buffer.from(pic.data).toString('base64')}`;
+    coverDataUrlCache.set(cacheKey, dataUrl);
+    return dataUrl;
+  } catch (_) {
+    return null;
+  }
+}
+
 function attachMainWindowDebugHooks(win) {
   if (!win) return;
   win.webContents.on('did-start-loading', () => {
@@ -74,6 +111,44 @@ function attachMainWindowDebugHooks(win) {
   });
   win.on('responsive', () => {
     logMain('INFO', 'main window responsive');
+  });
+}
+
+function bindLyricAutoDownloadHook(webContents) {
+  if (!webContents?.session) return;
+  const ses = webContents.session;
+  if (hookedSessions.has(ses)) return;
+  hookedSessions.add(ses);
+  ses.on('will-download', (_, item) => {
+    const target = lyricDownloadTarget;
+    if (!target?.trackPath) return;
+    try {
+      const trackParsed = path.parse(target.trackPath);
+      const originalName = item.getFilename() || '';
+      const originalExt = path.extname(originalName).toLowerCase();
+      const ext = originalExt === '.txt' ? '.txt' : '.lrc';
+      const targetPath = path.join(trackParsed.dir, `${trackParsed.name}${ext}`);
+      item.setSavePath(targetPath);
+      logMain('INFO', 'auto lyric download save path set', { from: originalName, to: targetPath });
+      item.once('done', (_, state) => {
+        const ok = state === 'completed';
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('lyrics:downloaded', {
+            ok,
+            state,
+            trackPath: target.trackPath,
+            targetPath
+          });
+        }
+        if (ok) {
+          logMain('INFO', 'auto lyric download completed', { targetPath });
+        } else {
+          logMain('WARN', 'auto lyric download not completed', { state, targetPath });
+        }
+      });
+    } catch (err) {
+      logMain('ERROR', 'auto lyric download hook failed', { error: err?.message || String(err) });
+    }
   });
 }
 
@@ -113,7 +188,9 @@ function ensureDataShape(raw) {
       lyricClickThrough: false,
       closeBehavior: 'ask',
       backgroundImagePath: '',
-      backgroundBlur: 8
+      backgroundBlur: 8,
+      volume: 0.8,
+      lyricEncodingMap: {}
     }
   };
   const merged = {
@@ -189,9 +266,10 @@ function decodeUtf16be(buf) {
 function scoreDecodedText(txt) {
   if (!txt) return -1e9;
   const bad = (txt.match(/\uFFFD/g) || []).length;
+  const nul = (txt.match(/\u0000/g) || []).length;
   const hasLrcTag = /\[\d{1,2}:\d{1,2}(?:\.\d+)?\]/.test(txt);
   const cjk = (txt.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) || []).length;
-  return (hasLrcTag ? 150 : 0) + cjk * 0.2 - bad * 30;
+  return (hasLrcTag ? 1000 : 0) + cjk * 0.1 - bad * 40 - nul * 3;
 }
 
 function decodeTextSmart(buf) {
@@ -210,10 +288,17 @@ function decodeTextSmart(buf) {
   const encodings = ['utf-8', 'gb18030', 'gbk', 'big5', 'shift_jis', 'euc-kr', 'utf-16le'];
   let best = '';
   let bestScore = -1e9;
+  let bestTagged = '';
+  let bestTaggedScore = -1e9;
   for (const enc of encodings) {
     try {
       const txt = new TextDecoder(enc).decode(buf);
       const score = scoreDecodedText(txt);
+      const tagged = /\[\d{1,2}:\d{1,2}(?:\.\d+)?\]/.test(txt);
+      if (tagged && score > bestTaggedScore) {
+        bestTaggedScore = score;
+        bestTagged = txt;
+      }
       if (score > bestScore) {
         bestScore = score;
         best = txt;
@@ -222,14 +307,81 @@ function decodeTextSmart(buf) {
       // ignore unsupported encoding in runtime
     }
   }
-  return best || new TextDecoder('utf-8').decode(buf);
+  return bestTagged || best || new TextDecoder('utf-8').decode(buf);
+}
+
+function decodeTextWithEncoding(buf, encoding) {
+  if (!buf || !buf.length) return '';
+  const enc = `${encoding || ''}`.toLowerCase();
+  if (!enc || enc === 'auto') return decodeTextSmart(buf);
+  if (enc === 'utf-16be') {
+    if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) return decodeUtf16be(buf.subarray(2));
+    return decodeUtf16be(buf);
+  }
+  if (enc === 'utf-16le') {
+    if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf.subarray(2));
+    return new TextDecoder('utf-16le').decode(buf);
+  }
+  return new TextDecoder(enc).decode(buf);
+}
+
+function shiftLrcTimestamps(raw, shiftSec) {
+  const text = `${raw || ''}`;
+  return text.replace(/\[(\d+):(\d+(?:\.(\d+))?)\]/g, (_, mmStr, secStr, fracStr) => {
+    const total = Number(mmStr) * 60 + Number(secStr);
+    const shifted = Math.max(0, total - shiftSec);
+    const precision = fracStr ? fracStr.length : 0;
+    if (precision > 0) {
+      const scale = 10 ** precision;
+      const ticks = Math.round(shifted * scale);
+      const mm = Math.floor(ticks / (60 * scale));
+      const rest = ticks - mm * 60 * scale;
+      const sec = rest / scale;
+      const secFixed = sec.toFixed(precision).padStart(precision + 3, '0');
+      return `[${String(mm).padStart(2, '0')}:${secFixed}]`;
+    }
+    const mm = Math.floor(shifted / 60);
+    const sec = Math.floor(shifted % 60);
+    return `[${String(mm).padStart(2, '0')}:${String(sec).padStart(2, '0')}]`;
+  });
 }
 
 function findLyricsForAudio(audioFile, lyricFiles) {
   const parsed = path.parse(audioFile);
-  const exactLrc = `${parsed.dir}/${parsed.name}.lrc`;
-  const exactTxt = `${parsed.dir}/${parsed.name}.txt`;
-  return lyricFiles.find((f) => f === exactLrc || f === exactTxt) || null;
+  const audioDir = normalizeId(parsed.dir);
+  const audioStem = `${parsed.name || ''}`.normalize('NFKC').trim().toLowerCase();
+  const audioStemLoose = audioStem.replace(/\s+/g, '');
+  const candidates = lyricFiles.filter((f) => normalizeId(path.dirname(f)) === audioDir);
+  if (!candidates.length) return null;
+
+  let exact = null;
+  for (const file of candidates) {
+    const lp = path.parse(file);
+    const stem = `${lp.name || ''}`.normalize('NFKC').trim().toLowerCase();
+    if (stem === audioStem) {
+      exact = file;
+      if (lp.ext.toLowerCase() === '.lrc') return file;
+    }
+  }
+  if (exact) return exact;
+
+  let loose = null;
+  for (const file of candidates) {
+    const lp = path.parse(file);
+    const stemLoose = `${lp.name || ''}`.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, '');
+    if (stemLoose === audioStemLoose) {
+      loose = file;
+      if (lp.ext.toLowerCase() === '.lrc') return file;
+    }
+  }
+  if (loose) return loose;
+
+  // Fallback: pick the closest same-folder lyric file by stem containment.
+  const byContain = candidates.find((f) => {
+    const stem = `${path.parse(f).name || ''}`.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, '');
+    return stem.includes(audioStemLoose) || audioStemLoose.includes(stem);
+  });
+  return byContain || null;
 }
 
 async function parseTrack(file, lyricFiles) {
@@ -305,6 +457,7 @@ async function scanFolders(folders, prevData) {
 }
 
 function createWindow() {
+  const appIconPath = resolveAppIconPath();
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -322,6 +475,7 @@ function createWindow() {
     }
   });
   attachMainWindowDebugHooks(mainWindow);
+  bindLyricAutoDownloadHook(mainWindow.webContents);
 
   const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
   if (!app.isPackaged) {
@@ -349,13 +503,54 @@ function createWindow() {
   });
   mainWindow.on('closed', () => {
     if (lyricWindow && !lyricWindow.isDestroyed()) lyricWindow.close();
+    if (lyricFinderWindow && !lyricFinderWindow.isDestroyed()) lyricFinderWindow.close();
     mainWindow = null;
     lyricWindow = null;
+    lyricFinderWindow = null;
   });
+}
+
+function createLyricFinderWindow(initialUrl) {
+  if (lyricFinderWindow && !lyricFinderWindow.isDestroyed()) {
+    if (initialUrl) lyricFinderWindow.webContents.send('lyric-finder:open-url', initialUrl);
+    lyricFinderWindow.show();
+    lyricFinderWindow.focus();
+    return lyricFinderWindow;
+  }
+  lyricFinderWindow = new BrowserWindow({
+    width: 980,
+    height: 720,
+    minWidth: 860,
+    minHeight: 620,
+    parent: mainWindow || undefined,
+    autoHideMenuBar: true,
+    backgroundColor: '#101218',
+    icon: resolveAppIconPath(),
+    webPreferences: {
+      preload: path.join(__dirname, 'lyric-finder-preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true
+    }
+  });
+  lyricFinderWindow.setMenuBarVisibility(false);
+  bindLyricAutoDownloadHook(lyricFinderWindow.webContents);
+  lyricFinderWindow.on('closed', () => {
+    lyricFinderWindow = null;
+    lyricDownloadTarget = null;
+  });
+  lyricFinderWindow.loadFile(path.join(__dirname, 'lyric-finder-window.html')).then(() => {
+    const url = initialUrl || 'https://www.toomic.com/';
+    lyricFinderWindow?.webContents.send('lyric-finder:open-url', url);
+  }).catch((err) => {
+    logMain('ERROR', 'lyric finder load page failed', { error: err?.message || String(err) });
+  });
+  return lyricFinderWindow;
 }
 
 function createLyricWindow() {
   if (lyricWindow && !lyricWindow.isDestroyed()) return lyricWindow;
+  const appIconPath = resolveAppIconPath();
   lyricWindow = new BrowserWindow({
     width: 720,
     height: 210,
@@ -389,6 +584,7 @@ function createLyricWindow() {
 
 function createTray() {
   if (appTray) return appTray;
+  const appIconPath = resolveAppIconPath();
   let trayIcon = nativeImage.createFromPath(appIconPath);
   if (trayIcon.isEmpty()) {
     trayIcon = nativeImage.createFromDataURL(
@@ -495,6 +691,9 @@ app.whenReady().then(() => {
   initMainLogger();
   logMain('INFO', 'app ready');
   Menu.setApplicationMenu(null);
+  app.on('web-contents-created', (_, contents) => {
+    bindLyricAutoDownloadHook(contents);
+  });
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -537,6 +736,17 @@ ipcMain.handle('dialog:pickBackgroundImage', async () => {
   return result.filePaths[0];
 });
 
+ipcMain.handle('dialog:pickLyricFile', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [
+      { name: 'Lyrics', extensions: ['lrc', 'txt'] }
+    ]
+  });
+  if (result.canceled || !result.filePaths?.length) return null;
+  return result.filePaths[0];
+});
+
 ipcMain.handle('data:load', async () => loadData());
 ipcMain.handle('data:save', async (_, data) => saveData(data));
 ipcMain.handle('scan:folders', async (_, folders) => {
@@ -572,10 +782,39 @@ ipcMain.handle('file:readText', async (_, filePath) => {
   }
 });
 
+ipcMain.handle('file:readTextWithEncoding', async (_, filePath, encoding) => {
+  try {
+    const buf = await fs.readFile(filePath);
+    return decodeTextWithEncoding(buf, encoding);
+  } catch (_) {
+    return null;
+  }
+});
+
+ipcMain.handle('file:writeText', async (_, filePath, content) => {
+  try {
+    if (!filePath) return false;
+    await fs.writeFile(filePath, `${content || ''}`, 'utf8');
+    return true;
+  } catch (_) {
+    return false;
+  }
+});
+
 ipcMain.handle('file:showInFolder', async (_, filePath) => {
   try {
     if (!filePath) return false;
     shell.showItemInFolder(filePath);
+    return true;
+  } catch (_) {
+    return false;
+  }
+});
+
+ipcMain.handle('external:open', async (_, url) => {
+  try {
+    if (!url) return false;
+    await shell.openExternal(url);
     return true;
   } catch (_) {
     return false;
@@ -626,6 +865,59 @@ ipcMain.handle('audio:readBuffer', async (_, filePath) => {
     };
   } catch (_) {
     return null;
+  }
+});
+
+ipcMain.handle('track:readCoverDataUrl', async (_, filePath) => {
+  return readTrackCoverDataUrl(filePath);
+});
+
+ipcMain.handle('lyrics:installForTrack', async (_, trackPath, lyricPath) => {
+  try {
+    if (!trackPath || !lyricPath) return null;
+    const trackParsed = path.parse(trackPath);
+    const srcExt = path.extname(lyricPath).toLowerCase();
+    const ext = srcExt === '.txt' ? '.txt' : '.lrc';
+    const targetPath = path.join(trackParsed.dir, `${trackParsed.name}${ext}`);
+    await fs.copyFile(lyricPath, targetPath);
+    return targetPath;
+  } catch (_) {
+    return null;
+  }
+});
+
+ipcMain.handle('lyrics:setDownloadTarget', async (_, trackPath) => {
+  if (!trackPath) return false;
+  lyricDownloadTarget = { trackPath };
+  return true;
+});
+
+ipcMain.handle('lyrics:clearDownloadTarget', async () => {
+  lyricDownloadTarget = null;
+  return true;
+});
+
+ipcMain.handle('lyrics:openFinderWindow', async (_, payload) => {
+  const url = payload?.url || 'https://www.toomic.com/';
+  const trackPath = payload?.trackPath || '';
+  if (trackPath) lyricDownloadTarget = { trackPath };
+  const win = createLyricFinderWindow(url);
+  if (!win || win.isDestroyed()) return false;
+  win.show();
+  win.focus();
+  return true;
+});
+
+ipcMain.handle('lyrics:shiftAndSave', async (_, lyricPath, offsetSec) => {
+  try {
+    if (!lyricPath || !existsSync(lyricPath)) return false;
+    const buf = await fs.readFile(lyricPath);
+    const decoded = decodeTextSmart(buf);
+    const shifted = shiftLrcTimestamps(decoded, Number(offsetSec) || 0);
+    await fs.writeFile(lyricPath, shifted, 'utf8');
+    return true;
+  } catch (_) {
+    return false;
   }
 });
 
