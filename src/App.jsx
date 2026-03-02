@@ -463,6 +463,7 @@ function App() {
 
   useEffect(() => {
     if (!electronAPI?.updateLyricsWindow) return;
+    if (!floatingLyricsEnabled) return;
     electronAPI.updateLyricsWindow({
       hasLyrics: lyricLines.length > 0,
       current: currentLyricLine,
@@ -471,7 +472,7 @@ function App() {
       title: currentTrack?.title || '',
       artist: currentTrack?.artist || ''
     });
-  }, [lyricLines.length, currentLyricLine, nextLyricLine, dark, currentTrack?.title, currentTrack?.artist]);
+  }, [floatingLyricsEnabled, lyricLines.length, currentLyricLine, nextLyricLine, dark, currentTrack?.title, currentTrack?.artist]);
 
   useEffect(() => {
     if (!electronAPI?.setLyricsWindowOptions) return;

@@ -556,6 +556,7 @@ function createLyricWindow() {
     height: 210,
     minWidth: 420,
     minHeight: 130,
+    show: false,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -947,9 +948,8 @@ ipcMain.handle('lyrics:hideWindow', () => {
 });
 
 ipcMain.handle('lyrics:update', (_, payload) => {
-  const win = createLyricWindow();
-  if (!win || win.isDestroyed()) return;
-  win.webContents.send('lyrics:update', payload || {});
+  if (!lyricWindow || lyricWindow.isDestroyed()) return;
+  lyricWindow.webContents.send('lyrics:update', payload || {});
 });
 
 ipcMain.handle('lyrics:minimizeFromWindow', () => {
