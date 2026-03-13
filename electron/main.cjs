@@ -496,6 +496,12 @@ function createWindow() {
     }
   }
   mainWindow.setMenuBarVisibility(false);
+  const syncMaximizedState = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('window:maximizedChanged', mainWindow.isMaximized());
+  };
+  mainWindow.on('maximize', syncMaximizedState);
+  mainWindow.on('unmaximize', syncMaximizedState);
   mainWindow.on('close', (e) => {
     if (isQuitting) return;
     e.preventDefault();
@@ -930,6 +936,11 @@ ipcMain.handle('window:toggleMaximize', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
   if (mainWindow.isMaximized()) mainWindow.unmaximize();
   else mainWindow.maximize();
+  return mainWindow.isMaximized();
+});
+
+ipcMain.handle('window:isMaximized', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
   return mainWindow.isMaximized();
 });
 

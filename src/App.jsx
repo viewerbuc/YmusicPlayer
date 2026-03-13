@@ -14,8 +14,7 @@ import {
   SkipBack,
   Search,
   X,
-  Minimize2,
-  Maximize2,
+  Square,
   Settings2,
   ChevronDown,
   Disc3,
@@ -167,6 +166,7 @@ function App() {
   const [holdLyricIdx, setHoldLyricIdx] = useState(null);
   const [lyricLines, setLyricLines] = useState([]);
   const [lyricAlignNotice, setLyricAlignNotice] = useState('');
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
 
   const audioRef = useRef(null);
   const panelLyricsScrollRef = useRef(null);
@@ -499,6 +499,29 @@ function App() {
     });
     return () => {
       if (typeof off === 'function') off();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!electronAPI?.onWindowMaximizedChanged) return;
+    const off = electronAPI.onWindowMaximizedChanged((maxed) => {
+      setIsWindowMaximized(!!maxed);
+    });
+    return () => {
+      if (typeof off === 'function') off();
+    };
+  }, []);
+
+  useEffect(() => {
+    let canceled = false;
+    const loadWindowMax = async () => {
+      if (!electronAPI?.windowIsMaximized) return;
+      const maxed = await electronAPI.windowIsMaximized();
+      if (!canceled) setIsWindowMaximized(!!maxed);
+    };
+    loadWindowMax();
+    return () => {
+      canceled = true;
     };
   }, []);
 
@@ -916,31 +939,33 @@ function App() {
             <div className="absolute inset-0 bg-white/8 dark:bg-black/38" />
           </div>
         )}
-        <div className="absolute left-4 top-3 flex items-center gap-2 z-20">
-          <button className="no-drag h-3 w-3 rounded-full bg-[#ff5f57]" onClick={() => electronAPI?.windowClose?.()} />
-          <button className="no-drag h-3 w-3 rounded-full bg-[#febc2e]" onClick={() => electronAPI?.windowMinimize?.()} />
-          <button className="no-drag h-3 w-3 rounded-full bg-[#28c840]" onClick={() => electronAPI?.windowToggleMaximize?.()} />
-        </div>
-
         <div className="relative z-10 grid h-full min-h-0 grid-cols-[280px_1fr]">
-          <aside className="relative p-4 pt-12 bg-white/28 dark:bg-black/22 backdrop-blur-2xl border-r border-black/5 dark:border-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.35)]">
-            <div className="mb-3 flex items-center justify-between">
+          <aside className="relative flex min-h-0 flex-col p-4 bg-white/20 dark:bg-black/22 backdrop-blur-2xl border-r border-black/5 dark:border-white/10">
+            <div className="mb-2 no-drag flex items-center gap-2 text-xs shrink-0">
+              <button onClick={() => setSettingsOpen(true)} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10" title="设置"><Settings2 size={16} /></button>
+              <button onClick={() => setDark((v) => !v)} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10" title="主题">
+                {dark ? <Sun size={16} /> : <Moon size={16} />}
+              </button>
+            </div>
+            <div className="mb-3 shrink-0">
               <div className="text-xs tracking-wide uppercase text-black/50 dark:text-white/40">Library</div>
             </div>
 
-            <nav className="space-y-1 text-sm">
-              <button className={`w-full rounded-md px-2 py-1.5 text-left ${playlistId === 'all' ? 'bg-[#007aff] text-white' : 'hover:bg-black/5 dark:hover:bg-white/10'}`} onClick={() => setPlaylistId('all')}>所有歌曲 ({uniqueTracks.length})</button>
-              {data.playlists.map((p) => (
-                <div key={p.id} className="flex items-center gap-2">
-                  <button className={`flex-1 rounded-md px-2 py-1.5 text-left ${playlistId === p.id ? 'bg-[#007aff] text-white' : 'hover:bg-black/5 dark:hover:bg-white/10'}`} onClick={() => setPlaylistId(p.id)}>{p.name} ({p.trackIds.length})</button>
-                  {!p.fixed && (
-                    <button onClick={() => removePlaylist(p.id)} className="p-1 text-black/40 dark:text-white/40 hover:text-red-400"><X size={14} /></button>
-                  )}
-                </div>
-              ))}
-            </nav>
+            <div className="apple-scroll min-h-0 flex-1 overflow-y-auto pr-1">
+              <nav className="space-y-1 text-sm">
+                <button className={`w-full rounded-md px-2 py-1.5 text-left ${playlistId === 'all' ? 'bg-[#007aff] text-white' : 'hover:bg-black/5 dark:hover:bg-white/10'}`} onClick={() => setPlaylistId('all')}>所有歌曲 ({uniqueTracks.length})</button>
+                {data.playlists.map((p) => (
+                  <div key={p.id} className="flex items-center gap-2">
+                    <button className={`flex-1 rounded-md px-2 py-1.5 text-left ${playlistId === p.id ? 'bg-[#007aff] text-white' : 'hover:bg-black/5 dark:hover:bg-white/10'}`} onClick={() => setPlaylistId(p.id)}>{p.name} ({p.trackIds.length})</button>
+                    {!p.fixed && (
+                      <button onClick={() => removePlaylist(p.id)} className="p-1 text-black/40 dark:text-white/40 hover:text-red-400"><X size={14} /></button>
+                    )}
+                  </div>
+                ))}
+              </nav>
+            </div>
 
-            <div className="mt-3">
+            <div className="mt-3 shrink-0">
               {!creatingPlaylist && (
                 <button
                   className="w-full rounded-md px-2 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20"
@@ -986,7 +1011,7 @@ function App() {
               )}
             </div>
 
-            <div className="mt-4 rounded-lg bg-gray-200/50 dark:bg-white/10 p-[2px] flex gap-1">
+            <div className="mt-4 rounded-lg bg-gray-200/50 dark:bg-white/10 p-[2px] flex gap-1 shrink-0">
               {[
                 ['songs', <ListMusic size={16} />, '歌曲'],
                 ['artists', <Users size={16} />, '作者'],
@@ -1007,7 +1032,7 @@ function App() {
           </aside>
 
           <main className="relative flex min-h-0 flex-col min-w-0">
-            <div className="drag-region flex items-center justify-between px-5 pt-4 pb-3 border-b border-black/5 dark:border-white/10">
+            <div className="drag-region relative flex items-center justify-between px-5 pt-4 pb-3 border-b border-black/5 dark:border-white/10">
               <div className="no-drag flex items-center gap-2 rounded-lg bg-white/60 dark:bg-white/5 px-3 py-1.5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
                 <Search size={16} className="text-black/40 dark:text-white/40" />
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索歌曲/歌手" className="no-drag bg-transparent outline-none text-sm w-56" />
@@ -1026,11 +1051,41 @@ function App() {
                   搜索中: {query.trim()}
                 </div>
               )}
-              <div className="no-drag flex items-center gap-2 text-xs">
-                <div className="text-black/45 dark:text-white/45">{displayTracks.length} 首</div>
-                <button onClick={() => setSettingsOpen(true)} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10" title="设置"><Settings2 size={16} /></button>
-                <button onClick={() => setDark((v) => !v)} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10">{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
-                <button onClick={() => setMini((v) => !v)} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10">{mini ? <Maximize2 size={16} /> : <Minimize2 size={16} />}</button>
+              <div className="no-drag pointer-events-none absolute left-[44%] top-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-black/50 dark:text-white/50">
+                已扫描 {uniqueTracks.length} 首
+              </div>
+              <div className="no-drag -mr-2 -mt-2 flex items-center text-black/70 dark:text-white/75">
+                <button
+                  className="no-drag flex h-8 w-11 items-center justify-center hover:bg-black/8 dark:hover:bg-white/12"
+                  onClick={() => electronAPI?.windowMinimize?.()}
+                  title="最小化"
+                >
+                  <span className="block h-[1.5px] w-3 rounded-full bg-current" />
+                </button>
+                <button
+                  className="no-drag flex h-8 w-11 items-center justify-center hover:bg-black/8 dark:hover:bg-white/12"
+                  onClick={async () => {
+                    const next = await electronAPI?.windowToggleMaximize?.();
+                    if (typeof next === 'boolean') setIsWindowMaximized(next);
+                  }}
+                  title="最大化/还原"
+                >
+                  {isWindowMaximized ? (
+                    <Square size={12} strokeWidth={1.8} />
+                  ) : (
+                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.6">
+                      <rect x="5" y="3" width="8" height="8" />
+                      <rect x="3" y="5" width="8" height="8" />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  className="no-drag flex h-8 w-12 items-center justify-center hover:bg-[#e81123] hover:text-white"
+                  onClick={() => electronAPI?.windowClose?.()}
+                  title="关闭"
+                >
+                  <X size={15} strokeWidth={1.8} />
+                </button>
               </div>
             </div>
 

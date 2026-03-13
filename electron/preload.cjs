@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readAudioBuffer: (filePath) => ipcRenderer.invoke('audio:readBuffer', filePath),
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+  windowIsMaximized: () => ipcRenderer.invoke('window:isMaximized'),
   windowClose: () => ipcRenderer.invoke('window:close'),
   showLyricsWindow: () => ipcRenderer.invoke('lyrics:showWindow'),
   hideLyricsWindow: () => ipcRenderer.invoke('lyrics:hideWindow'),
@@ -42,5 +43,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_, behavior) => cb(behavior);
     ipcRenderer.on('settings:closeBehavior', handler);
     return () => ipcRenderer.removeListener('settings:closeBehavior', handler);
+  },
+  onWindowMaximizedChanged: (cb) => {
+    const handler = (_, maximized) => cb(!!maximized);
+    ipcRenderer.on('window:maximizedChanged', handler);
+    return () => ipcRenderer.removeListener('window:maximizedChanged', handler);
   }
 });
