@@ -13,6 +13,11 @@ function candidatePythonCommands() {
   return process.platform === 'win32' ? ['py', 'python'] : ['python3', 'python'];
 }
 
+function pyinstallerArchitectureArgs() {
+  const targetArch = process.env.YMUSICDL_HELPER_ARCH || (process.platform === 'darwin' ? 'universal2' : '');
+  return targetArch ? ['--target-architecture', targetArch] : [];
+}
+
 function resolveMusicdlPath() {
   const candidates = [
     process.env.MUSICDL_REPO,
@@ -45,6 +50,7 @@ for (const python of candidatePythonCommands()) {
     '--distpath', distPath,
     '--workpath', buildPath,
     '--specpath', buildPath,
+    ...pyinstallerArchitectureArgs(),
     helperPath,
   ], { cwd: root, env, stdio: 'inherit' });
   lastResult = result;

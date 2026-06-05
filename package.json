@@ -84,7 +84,8 @@
       ],
       "identity": null,
       "category": "public.app-category.music",
-      "icon": "public/icon.png"
+      "icon": "public/icon.png",
+      "x64ArchFiles": "Contents/Resources/ymusicdl/ymusicdl-helper"
     },
     "win": {
       "target": [
