@@ -21,9 +21,12 @@ jobs:
           - os: ubuntu-latest
             name: linux
             cmd: npm run dist:linux
-          - os: macos-latest
-            name: macos
-            cmd: npm run dist:mac
+          - os: macos-15-intel
+            name: macos-x64
+            cmd: npm run dist:mac:x64
+          - os: macos-15
+            name: macos-arm64
+            cmd: npm run dist:mac:arm64
 
     runs-on: ${{ matrix.os }}
 
