@@ -37,6 +37,20 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install musicdl helper deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          git clone --depth 1 https://github.com/CharlesPikachu/musicdl.git "$RUNNER_TEMP/musicdl"
+          python -m pip install "$RUNNER_TEMP/musicdl"
+          echo "MUSICDL_REPO=$RUNNER_TEMP/musicdl" >> "$GITHUB_ENV"
+
       - name: Install deps
         run: npm ci
 
