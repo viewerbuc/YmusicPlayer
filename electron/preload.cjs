@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveData: (payload) => ipcRenderer.invoke('data:save', payload),
   scanFolders: (folders) => ipcRenderer.invoke('scan:folders', folders),
   rescanTrack: (trackPath) => ipcRenderer.invoke('scan:singleTrack', trackPath),
+  getOnlineSources: () => ipcRenderer.invoke('online:sources'),
+  searchOnlineMusic: (payload) => ipcRenderer.invoke('online:search', payload),
+  cancelOnlineSearch: () => ipcRenderer.invoke('online:cancelSearch'),
+  downloadOnlineMusic: (payload) => ipcRenderer.invoke('online:download', payload),
+  pickDownloadFolder: () => ipcRenderer.invoke('dialog:pickDownloadFolder'),
+  getDefaultDownloadFolder: () => ipcRenderer.invoke('online:defaultDownloadFolder'),
   readTextFile: (filePath) => ipcRenderer.invoke('file:readText', filePath),
   readTextFileWithEncoding: (filePath, encoding) => ipcRenderer.invoke('file:readTextWithEncoding', filePath, encoding),
   writeTextFile: (filePath, content) => ipcRenderer.invoke('file:writeText', filePath, content),
@@ -38,6 +44,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_, payload) => cb(payload);
     ipcRenderer.on('lyrics:downloaded', handler);
     return () => ipcRenderer.removeListener('lyrics:downloaded', handler);
+  },
+  onOnlineSearchStatus: (cb) => {
+    const handler = (_, payload) => cb(payload || {});
+    ipcRenderer.on('online:searchStatus', handler);
+    return () => ipcRenderer.removeListener('online:searchStatus', handler);
+  },
+  onOnlineSearchResults: (cb) => {
+    const handler = (_, payload) => cb(payload || {});
+    ipcRenderer.on('online:searchResults', handler);
+    return () => ipcRenderer.removeListener('online:searchResults', handler);
   },
   onCloseBehaviorUpdated: (cb) => {
     const handler = (_, behavior) => cb(behavior);

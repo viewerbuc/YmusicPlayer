@@ -2,11 +2,18 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage, shell } = 
 const path = require('path');
 const fs = require('fs/promises');
 const { existsSync, mkdirSync, appendFileSync } = require('fs');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const mm = require('music-metadata');
 
 const AUDIO_EXT = new Set(['.mp3', '.flac', '.wma', '.wav', '.m4a', '.aac', '.ogg']);
 const LYRIC_EXT = new Set(['.lrc', '.txt']);
+const ONLINE_MUSIC_SOURCES = [
+  { id: 'NeteaseMusicClient', label: '网易云音乐' },
+  { id: 'SodaMusicClient', label: '汽水音乐' },
+  { id: 'MiguMusicClient', label: '咪咕音乐' },
+  { id: 'QQMusicClient', label: 'QQ音乐' },
+  { id: 'KuwoMusicClient', label: '酷我音乐' }
+];
 
 let mainWindow;
 let lyricWindow;
@@ -22,6 +29,7 @@ let mainLogFile = '';
 const coverDataUrlCache = new Map();
 let lyricDownloadTarget = null;
 const hookedSessions = new WeakSet();
+let onlineSearchRun = null;
 
 function resolveAppIconPath() {
   const candidates = [
@@ -30,6 +38,165 @@ function resolveAppIconPath() {
     path.join(__dirname, '..', 'icon.png')
   ].filter(Boolean);
   return candidates.find((p) => existsSync(p)) || candidates[candidates.length - 1];
+}
+
+function resolveMusicdlHelperCommand() {
+  const helperName = process.platform === 'win32' ? 'ymusicdl-helper.exe' : 'ymusicdl-helper';
+  const packagedCandidates = [
+    path.join(process.resourcesPath || '', 'ymusicdl', helperName),
+    path.join(process.resourcesPath || '', helperName)
+  ].filter(Boolean);
+  const packaged = packagedCandidates.find((p) => existsSync(p));
+  if (packaged) return { cmd: packaged, argsPrefix: [], mode: 'binary' };
+
+  const scriptPath = path.join(__dirname, '..', 'python', 'ymusicdl_helper.py');
+  const pythonCandidates = process.platform === 'win32' ? ['py', 'python'] : ['python3', 'python'];
+  return { cmd: pythonCandidates[0], argsPrefix: [scriptPath], mode: 'python-script' };
+}
+
+function resolveMusicdlDevPath() {
+  const candidates = [
+    process.env.MUSICDL_REPO,
+    process.env.YMUSICDL_DEV_PATH,
+    path.join(__dirname, '..', 'python', 'vendor'),
+    path.resolve(__dirname, '..', '..', '..', 'python', 'musicdl')
+  ].filter(Boolean);
+  return candidates.find((candidate) => existsSync(path.join(candidate, 'musicdl'))) || '';
+}
+
+function runMusicdlHelper(args, options = {}) {
+  return new Promise((resolve) => {
+    const helper = resolveMusicdlHelperCommand();
+    const finalArgs = [...helper.argsPrefix, ...args];
+    const childEnv = { ...process.env };
+    const devPath = resolveMusicdlDevPath();
+    if (devPath) childEnv.YMUSICDL_DEV_PATH = devPath;
+    const stateHome = path.join(app.getPath('userData'), 'helper-state');
+    mkdirSync(stateHome, { recursive: true });
+    childEnv.XDG_STATE_HOME = childEnv.XDG_STATE_HOME || stateHome;
+    childEnv.XDG_CACHE_HOME = childEnv.XDG_CACHE_HOME || path.join(app.getPath('userData'), 'helper-cache');
+    childEnv.XDG_DATA_HOME = childEnv.XDG_DATA_HOME || path.join(app.getPath('userData'), 'helper-data');
+    logMain('INFO', 'starting musicdl helper', { cmd: helper.cmd, args: finalArgs, mode: helper.mode, timeoutMs: options.timeoutMs || 1000 * 60 * 10 });
+    const child = spawn(helper.cmd, finalArgs, {
+      cwd: app.getPath('userData'),
+      env: childEnv,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    if (typeof options.onChild === 'function') options.onChild(child);
+    let stdout = '';
+    let stderr = '';
+    const timeoutMs = options.timeoutMs || 1000 * 60 * 10;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGKILL'); } catch (_) {}
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: err?.message || String(err), stderr, stdout, helper });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        logMain('ERROR', 'musicdl helper timed out', { cmd: helper.cmd, args: finalArgs, timeoutMs, stderr: stderr.slice(-1000) });
+        resolve({ ok: false, error: `musicdl helper timed out after ${Math.round(timeoutMs / 1000)}s`, code, stdout, stderr, helper, timedOut: true });
+        return;
+      }
+      const trimmed = stdout.trim();
+      const lastLine = trimmed.split(/\r?\n/).filter(Boolean).pop() || '';
+      try {
+        const parsed = JSON.parse(lastLine || '{}');
+        logMain(parsed?.ok === false ? 'WARN' : 'INFO', 'musicdl helper finished', { code, ok: parsed?.ok, stderr: stderr.slice(-1000) });
+        resolve({ ...parsed, helper, code, stderr });
+      } catch (err) {
+        logMain('ERROR', 'musicdl helper returned invalid json', { code, error: err?.message || String(err), stdout: stdout.slice(-1000), stderr: stderr.slice(-1000) });
+        resolve({ ok: false, error: err?.message || String(err), code, stdout, stderr, helper });
+      }
+    });
+    if (options.input) child.stdin.end(options.input);
+    else child.stdin.end();
+  });
+}
+
+function sendOnlineSearchStatus(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('online:searchStatus', payload || {});
+  }
+}
+
+function sendOnlineSearchResults(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('online:searchResults', payload || {});
+  }
+}
+
+function stopOnlineSearchRun(reason = '用户已暂停搜索') {
+  if (!onlineSearchRun) return false;
+  onlineSearchRun.cancelled = true;
+  onlineSearchRun.reason = reason;
+  if (onlineSearchRun.child && !onlineSearchRun.child.killed) {
+    try { onlineSearchRun.child.kill('SIGKILL'); } catch (_) {}
+  }
+  sendOnlineSearchStatus({ active: false, cancelled: true, message: reason });
+  return true;
+}
+
+async function searchOnlineSource({ keyword, sourceId, workDir, limitPerSource, timeoutMs, runState }) {
+  return runMusicdlHelper([
+    'search',
+    '--keyword', keyword,
+    '--sources', sourceId,
+    '--work-dir', workDir,
+    '--limit-per-source', `${limitPerSource}`
+  ], {
+    timeoutMs,
+    onChild: (child) => {
+      if (onlineSearchRun === runState) runState.child = child;
+    }
+  });
+}
+
+async function pickDefaultDownloadFolder() {
+  const data = await loadData();
+  const folders = (data.scanFolders || []).filter(Boolean);
+  if (folders[0]) return folders[0];
+  return path.join(app.getPath('music'), 'YMusicPlayer');
+}
+
+async function mergeDownloadedTracks(downloadedItems) {
+  const data = await loadData();
+  const nextTracks = [...(data.tracks || [])];
+  const byId = new Map(nextTracks.map((track, index) => [track.id, index]));
+  const added = [];
+  for (const item of downloadedItems || []) {
+    const audioPath = item?.audio_path || item?._save_path;
+    if (!audioPath || !existsSync(audioPath)) continue;
+    const files = await walk(path.dirname(audioPath));
+    const normalized = files.map((f) => f.replaceAll('\\', '/'));
+    const lyricFiles = normalized.filter((f) => LYRIC_EXT.has(path.extname(f).toLowerCase()));
+    const track = await parseTrack(audioPath.replaceAll('\\', '/'), lyricFiles);
+    const prevIndex = byId.get(track.id);
+    if (prevIndex == null) {
+      nextTracks.push(track);
+      byId.set(track.id, nextTracks.length - 1);
+      added.push(track);
+    } else {
+      track.liked = !!nextTracks[prevIndex].liked;
+      nextTracks[prevIndex] = track;
+      added.push(track);
+    }
+  }
+  const scanFolders = [...new Set([...(data.scanFolders || []), ...added.map((track) => track.folder)])];
+  const validTrackIds = new Set(nextTracks.map((track) => track.id));
+  const playlists = (data.playlists || []).map((playlist) => ({
+    ...playlist,
+    trackIds: [...new Set((playlist.trackIds || []).filter((id) => validTrackIds.has(id)))]
+  }));
+  const nextData = ensureDataShape({ ...data, scanFolders, tracks: nextTracks, playlists });
+  await saveData(nextData);
+  return { data: nextData, tracks: added };
 }
 
 function logMain(level, message, extra) {
@@ -778,6 +945,110 @@ ipcMain.handle('scan:singleTrack', async (_, trackPath) => {
 
   await saveData(data);
   return track;
+});
+
+ipcMain.handle('online:sources', async () => ONLINE_MUSIC_SOURCES);
+
+ipcMain.handle('dialog:pickDownloadFolder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: '选择下载保存目录'
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('online:defaultDownloadFolder', async () => pickDefaultDownloadFolder());
+
+ipcMain.handle('online:cancelSearch', async () => stopOnlineSearchRun('已暂停搜索，保留已找到的结果'));
+
+ipcMain.handle('online:search', async (_, payload) => {
+  const keyword = `${payload?.keyword || ''}`.trim();
+  if (!keyword) return { ok: false, error: '请输入搜索关键词' };
+  stopOnlineSearchRun('已开始新的搜索');
+  const sourceIds = Array.isArray(payload?.sources) && payload.sources.length
+    ? payload.sources
+    : ONLINE_MUSIC_SOURCES.map((source) => source.id);
+  const workDir = path.join(app.getPath('userData'), 'musicdl-search-cache');
+  mkdirSync(workDir, { recursive: true });
+  const limitPerSource = Math.max(1, Math.min(20, Number(payload?.limitPerSource) || 15));
+  const sourceTimeoutMs = Number(payload?.timeoutMs) || Math.max(90000, limitPerSource * 9000);
+  const results = [];
+  const errors = [];
+  const runState = { cancelled: false, reason: '', child: null };
+  let completedSources = 0;
+  onlineSearchRun = runState;
+  sendOnlineSearchStatus({ active: true, current: '', completed: 0, total: sourceIds.length, message: '开始搜索在线音乐' });
+  for (let index = 0; index < sourceIds.length; index += 1) {
+    if (runState.cancelled) break;
+    const sourceId = sourceIds[index];
+    const sourceLabel = ONLINE_MUSIC_SOURCES.find((source) => source.id === sourceId)?.label || sourceId;
+    sendOnlineSearchStatus({ active: true, current: sourceId, sourceLabel, completed: index, total: sourceIds.length, message: `正在搜索 ${sourceLabel}，最多 ${limitPerSource} 首` });
+    let result = await searchOnlineSource({
+      keyword,
+      sourceId,
+      workDir,
+      limitPerSource,
+      timeoutMs: sourceTimeoutMs,
+      runState
+    });
+    if (result.timedOut && !runState.cancelled && limitPerSource > 5) {
+      sendOnlineSearchStatus({ active: true, current: sourceId, sourceLabel, completed: index, total: sourceIds.length, message: `${sourceLabel} 搜索较慢，改用 5 首快速重试` });
+      result = await searchOnlineSource({
+        keyword,
+        sourceId,
+        workDir,
+        limitPerSource: 5,
+        timeoutMs: 60000,
+        runState
+      });
+      if (result.ok) result.partialRetry = true;
+    }
+    if (runState.cancelled) break;
+    if (result.ok) {
+      const sourceResults = result.results || [];
+      results.push(...sourceResults);
+      sendOnlineSearchResults({ append: sourceResults, results, sourceId, sourceLabel });
+    } else {
+      errors.push({ source: sourceId, sourceLabel, error: result.error || '搜索失败', timedOut: !!result.timedOut });
+      logMain('ERROR', 'online music source search failed', { sourceId, error: result.error, stderr: result.stderr, helper: result.helper });
+    }
+    sendOnlineSearchStatus({ active: true, current: sourceId, sourceLabel, completed: index + 1, total: sourceIds.length, message: `${sourceLabel} 搜索完成` });
+    completedSources = index + 1;
+  }
+  const cancelled = runState.cancelled;
+  if (onlineSearchRun === runState) onlineSearchRun = null;
+  sendOnlineSearchStatus({ active: false, cancelled, current: '', completed: completedSources, total: sourceIds.length, message: cancelled ? (runState.reason || '已暂停搜索') : '搜索结束' });
+  return {
+    ok: cancelled || results.length > 0 || errors.length < sourceIds.length,
+    cancelled,
+    results,
+    errors,
+    error: results.length || cancelled ? '' : (errors[0]?.error || '未找到可下载歌曲')
+  };
+});
+
+ipcMain.handle('online:download', async (_, payload) => {
+  const songs = Array.isArray(payload?.songs) ? payload.songs : [];
+  if (!songs.length) return { ok: false, error: '请选择要下载的歌曲' };
+  const targetDir = payload?.targetDir || await pickDefaultDownloadFolder();
+  mkdirSync(targetDir, { recursive: true });
+  const sourceIds = [...new Set(songs.map((song) => song?.source).filter(Boolean))];
+  const input = JSON.stringify({ songs, target_dir: targetDir, sources: sourceIds });
+  const result = await runMusicdlHelper(['download', '--target-dir', targetDir], {
+    input,
+    timeoutMs: 1000 * 60 * 20
+  });
+  if (!result.ok) {
+    logMain('ERROR', 'online music download failed', { error: result.error, stderr: result.stderr, helper: result.helper });
+    return result;
+  }
+  const merged = await mergeDownloadedTracks(result.downloaded || []);
+  return {
+    ...result,
+    data: merged.data,
+    tracks: merged.tracks
+  };
 });
 
 ipcMain.handle('file:readText', async (_, filePath) => {

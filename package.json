@@ -10,9 +10,10 @@
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "dev": "node scripts/dev-electron.cjs",
     "build": "vite build --base=./",
-    "dist:renderer": "vite build --base=./",
+    "helper:build": "node scripts/build-ymusicdl-helper.cjs",
+    "dist:renderer": "npm run helper:build && vite build --base=./",
     "dist:win": "npm run dist:renderer && electron-builder --publish never --win nsis",
     "dist:linux": "npm run dist:renderer && electron-builder --publish never --linux AppImage deb --x64",
     "dist:mac": "npm run dist:renderer && electron-builder --publish never --mac dmg --universal",
@@ -56,6 +57,13 @@
       {
         "from": "public/icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "resources/ymusicdl",
+        "to": "ymusicdl",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "extraMetadata": {

@@ -20,7 +20,8 @@ import {
   Disc3,
   Volume2,
   Moon,
-  Sun
+  Sun,
+  DownloadCloud
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -53,6 +54,14 @@ const MIME_BY_EXT = {
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg'
 };
+
+const ONLINE_SOURCES = [
+  { id: 'NeteaseMusicClient', label: '网易云音乐' },
+  { id: 'SodaMusicClient', label: '汽水音乐' },
+  { id: 'MiguMusicClient', label: '咪咕音乐' },
+  { id: 'QQMusicClient', label: 'QQ音乐' },
+  { id: 'KuwoMusicClient', label: '酷我音乐' }
+];
 
 function formatDuration(seconds) {
   const s = Number.isFinite(seconds) ? seconds : 0;
@@ -167,6 +176,17 @@ function App() {
   const [lyricLines, setLyricLines] = useState([]);
   const [lyricAlignNotice, setLyricAlignNotice] = useState('');
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+  const [onlineQuery, setOnlineQuery] = useState('');
+  const [onlineSources, setOnlineSources] = useState(ONLINE_SOURCES);
+  const [selectedOnlineSources, setSelectedOnlineSources] = useState(ONLINE_SOURCES.map((source) => source.id));
+  const [onlineResults, setOnlineResults] = useState([]);
+  const [selectedOnlineKeys, setSelectedOnlineKeys] = useState([]);
+  const [onlineBusy, setOnlineBusy] = useState(false);
+  const [onlineDownloading, setOnlineDownloading] = useState(false);
+  const [onlineNotice, setOnlineNotice] = useState('');
+  const [onlineSearchStatus, setOnlineSearchStatus] = useState(null);
+  const [onlineLimitPerSource, setOnlineLimitPerSource] = useState(15);
+  const [downloadFolder, setDownloadFolder] = useState('');
 
   const audioRef = useRef(null);
   const panelLyricsScrollRef = useRef(null);
@@ -187,6 +207,46 @@ function App() {
       setLoaded(true);
     };
     load();
+  }, []);
+
+  useEffect(() => {
+    const loadOnlineMeta = async () => {
+      if (!electronAPI) return;
+      const sources = await electronAPI.getOnlineSources?.();
+      if (Array.isArray(sources) && sources.length) {
+        setOnlineSources(sources);
+        setSelectedOnlineSources(sources.map((source) => source.id));
+      }
+      const folder = await electronAPI.getDefaultDownloadFolder?.();
+      if (folder) setDownloadFolder(folder);
+    };
+    loadOnlineMeta();
+  }, []);
+
+  useEffect(() => {
+    if (!electronAPI?.onOnlineSearchStatus) return;
+    const off = electronAPI.onOnlineSearchStatus((status) => {
+      setOnlineSearchStatus(status || null);
+      if (status?.message) setOnlineNotice(status.message);
+    });
+    return () => {
+      if (typeof off === 'function') off();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!electronAPI?.onOnlineSearchResults) return;
+    const off = electronAPI.onOnlineSearchResults((payload) => {
+      if (Array.isArray(payload?.results)) {
+        setOnlineResults(payload.results);
+      } else if (Array.isArray(payload?.append) && payload.append.length) {
+        setOnlineResults((prev) => [...prev, ...payload.append]);
+      }
+      if (payload?.sourceLabel) setOnlineNotice(`${payload.sourceLabel} 已返回结果，可先选择下载`);
+    });
+    return () => {
+      if (typeof off === 'function') off();
+    };
   }, []);
 
   useEffect(() => {
@@ -723,6 +783,89 @@ function App() {
     return fresh;
   };
 
+  const toggleOnlineSource = (sourceId) => {
+    setSelectedOnlineSources((prev) => {
+      if (prev.includes(sourceId)) {
+        const next = prev.filter((id) => id !== sourceId);
+        return next.length ? next : prev;
+      }
+      return [...prev, sourceId];
+    });
+  };
+
+  const toggleOnlineSelection = (key) => {
+    setSelectedOnlineKeys((prev) => (prev.includes(key) ? prev.filter((id) => id !== key) : [...prev, key]));
+  };
+
+  const searchOnlineMusic = async () => {
+    const keyword = onlineQuery.trim();
+    if (!keyword || !electronAPI?.searchOnlineMusic) return;
+    setOnlineBusy(true);
+    setOnlineSearchStatus({ active: true, completed: 0, total: selectedOnlineSources.length, message: `准备启动 musicdl，每源最多 ${onlineLimitPerSource} 首...` });
+    setOnlineNotice('正在搜索在线音乐...');
+    setSelectedOnlineKeys([]);
+    try {
+      const result = await electronAPI.searchOnlineMusic({
+        keyword,
+        sources: selectedOnlineSources,
+        limitPerSource: onlineLimitPerSource
+      });
+      if (!result?.ok) {
+        setOnlineResults([]);
+        setOnlineNotice(result?.error || '搜索失败，请稍后重试');
+        setOnlineSearchStatus(null);
+        return;
+      }
+      setOnlineResults(result.results || []);
+      if (result.cancelled) {
+        setOnlineNotice((result.results || []).length ? `已暂停搜索，保留 ${result.results.length} 首结果` : '已暂停搜索，暂未找到结果');
+        return;
+      }
+      const errorText = result.errors?.length ? `，${result.errors.length} 个源失败/超时` : '';
+      setOnlineNotice((result.results || []).length ? `找到 ${result.results.length} 首可下载歌曲${errorText}` : '未找到可下载歌曲');
+    } finally {
+      setOnlineBusy(false);
+      setOnlineSearchStatus(null);
+    }
+  };
+
+  const pauseOnlineSearch = async () => {
+    if (!electronAPI?.cancelOnlineSearch) return;
+    setOnlineNotice('正在暂停搜索，保留已找到的结果...');
+    await electronAPI.cancelOnlineSearch();
+  };
+
+  const pickOnlineDownloadFolder = async () => {
+    const selected = await electronAPI?.pickDownloadFolder?.();
+    if (selected) setDownloadFolder(selected);
+  };
+
+  const downloadSelectedOnlineMusic = async () => {
+    if (!electronAPI?.downloadOnlineMusic) return;
+    const selectedSongs = onlineResults.filter((item) => selectedOnlineKeys.includes(item.key));
+    if (!selectedSongs.length) {
+      setOnlineNotice('请先选择要下载的歌曲');
+      return;
+    }
+    setOnlineDownloading(true);
+    setOnlineNotice(`正在下载 ${selectedSongs.length} 首歌曲...`);
+    try {
+      const result = await electronAPI.downloadOnlineMusic({
+        songs: selectedSongs,
+        targetDir: downloadFolder
+      });
+      if (!result?.ok) {
+        setOnlineNotice(result?.error || '下载失败，请稍后重试');
+        return;
+      }
+      if (result.data) setData(result.data);
+      setSelectedOnlineKeys([]);
+      setOnlineNotice(`下载完成，已导入 ${result.tracks?.length || 0} 首歌曲`);
+    } finally {
+      setOnlineDownloading(false);
+    }
+  };
+
   const openLyricFinder = () => {
     if (!currentTrack || !electronAPI?.openLyricFinderWindow) return;
     const keyword = `${currentTrack.artist || ''} - ${currentTrack.title || ''}`.trim();
@@ -866,6 +1009,152 @@ function App() {
     const nextTop = Math.max(0, el.offsetTop - scroller.clientHeight * 0.45);
     scroller.scrollTo({ top: nextTop, behavior: 'smooth' });
   }, [activePanelLyricId, playerPanelOpen, currentTrackId, lyricOffsetSec, holdLyricIdx]);
+
+  const renderOnlineDownloadPanel = () => (
+    <div className="p-4 pb-8 space-y-4">
+      <section className="rounded-2xl bg-white/50 dark:bg-[#1e1e1e]/55 backdrop-blur-md border border-black/5 dark:border-white/10 p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.35)]">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl bg-white/70 dark:bg-white/8 border border-black/5 dark:border-white/10 px-3 py-2 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+            <Search size={17} className="text-black/40 dark:text-white/45" />
+            <input
+              value={onlineQuery}
+              onChange={(e) => setOnlineQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') searchOnlineMusic();
+              }}
+              placeholder="输入歌曲名、歌手或歌词关键词"
+              className="min-w-0 flex-1 bg-transparent outline-none text-sm"
+            />
+          </div>
+          <button
+            className="rounded-xl px-4 py-2 text-sm font-medium text-white bg-gradient-to-b from-blue-500 to-blue-600 disabled:opacity-55"
+            onClick={searchOnlineMusic}
+            disabled={onlineBusy || !onlineQuery.trim() || !selectedOnlineSources.length}
+          >
+            {onlineBusy ? `搜索中 ${onlineSearchStatus?.completed || 0}/${onlineSearchStatus?.total || selectedOnlineSources.length}` : '搜索'}
+          </button>
+          {onlineBusy && (
+            <button
+              className="rounded-xl px-4 py-2 text-sm font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 border border-black/5 dark:border-white/10"
+              onClick={pauseOnlineSearch}
+            >
+              暂停搜索
+            </button>
+          )}
+          <button
+            className="rounded-xl px-4 py-2 text-sm font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 border border-black/5 dark:border-white/10 disabled:opacity-55"
+            onClick={downloadSelectedOnlineMusic}
+            disabled={onlineDownloading || !selectedOnlineKeys.length}
+          >
+            {onlineDownloading ? '下载中...' : `下载选中 (${selectedOnlineKeys.length})`}
+          </button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          {onlineSources.map((source) => {
+            const active = selectedOnlineSources.includes(source.id);
+            return (
+              <button
+                key={source.id}
+                className={`rounded-full px-3 py-1.5 border transition-colors ${
+                  active
+                    ? 'border-[#007aff]/40 bg-[#007aff]/12 text-[#0066d6] dark:text-[#9accff]'
+                    : 'border-black/8 dark:border-white/10 bg-black/4 dark:bg-white/6 text-black/52 dark:text-white/52 hover:bg-black/8 hover:dark:bg-white/10'
+                }`}
+                onClick={() => toggleOnlineSource(source.id)}
+              >
+                {source.label}
+              </button>
+            );
+          })}
+          <div className="ml-auto flex items-center gap-1.5 rounded-full border border-black/8 dark:border-white/10 bg-black/4 dark:bg-white/6 px-3 py-1.5 text-black/52 dark:text-white/52 transition-colors hover:bg-black/8 hover:dark:bg-white/10">
+            <span className="text-black/52 dark:text-white/52">每个音乐源</span>
+            <select
+              value={onlineLimitPerSource}
+              onChange={(e) => setOnlineLimitPerSource(Number(e.target.value) || 15)}
+              className="appearance-none bg-transparent pr-4 outline-none font-medium text-[#0066d6] dark:text-[#9accff]"
+              disabled={onlineBusy}
+              style={{ backgroundImage: 'linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%)', backgroundPosition: 'calc(100% - 7px) 52%, calc(100% - 3px) 52%', backgroundSize: '4px 4px, 4px 4px', backgroundRepeat: 'no-repeat' }}
+            >
+              {[10, 15, 20].map((value) => (
+                <option key={value} value={value} className="bg-white text-black dark:bg-[#111722] dark:text-white">{value} 首</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 text-xs text-black/55 dark:text-white/55 lg:flex-row lg:items-center">
+          <div className="truncate" title={downloadFolder || '默认音乐目录'}>
+            保存到：{downloadFolder || '默认音乐目录'}
+          </div>
+          <button className="w-fit rounded-lg px-2.5 py-1 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 border border-black/5 dark:border-white/10" onClick={pickOnlineDownloadFolder}>
+            更换目录
+          </button>
+        </div>
+
+        {(!!onlineNotice || onlineSearchStatus?.active) && (
+          <div className="mt-3 rounded-lg bg-black/5 dark:bg-white/8 border border-black/5 dark:border-white/10 px-3 py-2 text-xs text-black/58 dark:text-white/62">
+            <div className="flex items-center justify-between gap-3">
+              <span>{onlineNotice || '正在运行 musicdl...'}</span>
+              {onlineSearchStatus?.active && (
+                <span className="shrink-0 text-[#0066d6] dark:text-[#9accff]">
+                  musicdl {onlineSearchStatus.completed || 0}/{onlineSearchStatus.total || selectedOnlineSources.length}
+                </span>
+              )}
+            </div>
+            {onlineSearchStatus?.active && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                <div
+                  className="h-full rounded-full bg-[#007aff] transition-all duration-300"
+                  style={{ width: `${Math.max(6, Math.round(((onlineSearchStatus.completed || 0) / Math.max(1, onlineSearchStatus.total || selectedOnlineSources.length)) * 100))}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="overflow-hidden rounded-2xl bg-white/50 dark:bg-[#1e1e1e]/55 backdrop-blur-md border border-black/5 dark:border-white/10">
+        <div className="grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] px-3 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 border-b border-black/5 dark:border-white/10">
+          <span />
+          <span>歌曲名</span>
+          <span>作者</span>
+          <span>专辑</span>
+          <span className="text-right">大小</span>
+          <span className="text-right pr-2">来源</span>
+        </div>
+        {onlineResults.map((item) => {
+          const checked = selectedOnlineKeys.includes(item.key);
+          return (
+            <div
+              key={item.key}
+              className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] items-center px-3 py-2 text-sm border-b border-black/5 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/8 apple-pointer ${
+                checked ? 'bg-[#007aff]/10 dark:bg-[#007aff]/18' : ''
+              }`}
+              onClick={() => toggleOnlineSelection(item.key)}
+            >
+              <input type="checkbox" checked={checked} readOnly className="mx-auto accent-[#007aff]" />
+              <div className="min-w-0">
+                <div className="truncate font-medium">{item.song_name}</div>
+                <div className="truncate text-[11px] text-black/45 dark:text-white/45">
+                  {item.ext || 'audio'} · {item.duration || '-:-:-'} {item.has_lyric ? '· 有歌词' : ''}
+                </div>
+              </div>
+              <div className="truncate text-black/62 dark:text-white/62">{item.singers}</div>
+              <div className="truncate text-black/55 dark:text-white/55">{item.album}</div>
+              <div className="text-right text-black/55 dark:text-white/55">{item.file_size}</div>
+              <div className="text-right pr-2 text-[#0066d6] dark:text-[#9accff]">{item.source_label || item.source}</div>
+            </div>
+          );
+        })}
+        {!onlineResults.length && (
+          <div className="py-16 text-center text-sm text-black/45 dark:text-white/45">
+            输入关键词后可从网易云、汽水、咪咕、QQ、酷我搜索并下载到本地曲库
+          </div>
+        )}
+      </section>
+    </div>
+  );
 
   const renderRow = (track, rowKey) => {
     const isActive = currentTrackId === track.id;
@@ -1015,7 +1304,8 @@ function App() {
               {[
                 ['songs', <ListMusic size={16} />, '歌曲'],
                 ['artists', <Users size={16} />, '作者'],
-                ['folders', <FolderTree size={16} />, '文件夹']
+                ['folders', <FolderTree size={16} />, '文件夹'],
+                ['online', <DownloadCloud size={16} />, '下载']
               ].map(([id, icon, label]) => (
                 <button key={id} onClick={() => setView(id)} className="relative flex-1 rounded-[6px] py-1.5 text-xs tracking-wide">
                   {view === id && (
@@ -1033,20 +1323,27 @@ function App() {
 
           <main className="relative flex min-h-0 flex-col min-w-0">
             <div className="drag-region relative flex items-center justify-between px-5 pt-4 pb-3 border-b border-black/5 dark:border-white/10">
-              <div className="no-drag flex items-center gap-2 rounded-lg bg-white/60 dark:bg-white/5 px-3 py-1.5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
-                <Search size={16} className="text-black/40 dark:text-white/40" />
-                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索歌曲/歌手" className="no-drag bg-transparent outline-none text-sm w-56" />
-                {query.trim() && (
-                  <button
-                    className="no-drag rounded-full p-0.5 text-black/45 dark:text-white/45 hover:bg-black/10 dark:hover:bg-white/10"
-                    onClick={() => setQuery('')}
-                    title="清空搜索"
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-              {query.trim() && (
+              {view !== 'online' ? (
+                <div className="no-drag flex items-center gap-2 rounded-lg bg-white/60 dark:bg-white/5 px-3 py-1.5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+                  <Search size={16} className="text-black/40 dark:text-white/40" />
+                  <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索歌曲/歌手" className="no-drag bg-transparent outline-none text-sm w-56" />
+                  {query.trim() && (
+                    <button
+                      className="no-drag rounded-full p-0.5 text-black/45 dark:text-white/45 hover:bg-black/10 dark:hover:bg-white/10"
+                      onClick={() => setQuery('')}
+                      title="清空搜索"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="no-drag flex items-center gap-2 rounded-lg bg-white/60 dark:bg-white/5 px-3 py-1.5 text-sm text-black/60 dark:text-white/65">
+                  <DownloadCloud size={16} />
+                  在线搜索下载
+                </div>
+              )}
+              {view !== 'online' && query.trim() && (
                 <div className="no-drag rounded-md px-2 py-1 text-xs bg-black/5 dark:bg-white/10 text-black/55 dark:text-white/55">
                   搜索中: {query.trim()}
                 </div>
@@ -1091,13 +1388,13 @@ function App() {
 
             {!mini && (
               <div className="apple-scroll flex-1 min-h-0 overflow-auto px-3 pb-40">
-                <div className="sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/10">
+                {view !== 'online' && <div className="sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/10">
                   <span className="text-center">喜欢</span>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'title'))}>歌曲名</button>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'artist'))}>作者</button>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'album'))}>专辑</button>
                   <button className="text-right pr-2 apple-pointer" onClick={() => setSort((s) => nextSort(s, 'duration'))}>时长</button>
-                </div>
+                </div>}
 
                 {view === 'songs' && displayTracks.map((track, idx) => renderRow(track, `songs-${track.id}-${idx}`))}
 
@@ -1116,7 +1413,8 @@ function App() {
                     {tracks.map((track, idx) => renderRow(track, `folders-${folder}-${track.id}-${idx}`))}
                   </section>
                 ))}
-                {displayTracks.length === 0 && (
+                {view === 'online' && renderOnlineDownloadPanel()}
+                {view !== 'online' && displayTracks.length === 0 && (
                   <div className="py-16 text-center text-sm text-black/45 dark:text-white/45">
                     没有匹配歌曲，请按歌曲名或歌手名搜索
                   </div>
