@@ -18,7 +18,7 @@ jobs:
           - os: windows-latest
             name: windows
             cmd: npm run dist:win
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             name: linux
             cmd: npm run dist:linux
           - os: macos-15-intel
