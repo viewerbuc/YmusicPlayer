@@ -191,6 +191,8 @@ function App() {
   const audioRef = useRef(null);
   const panelLyricsScrollRef = useRef(null);
   const sourceSwitchingRef = useRef(false);
+  const playHistoryRef = useRef([]);
+  const audioLoadSeqRef = useRef(0);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -349,13 +351,18 @@ function App() {
 
   useEffect(() => {
     let canceled = false;
+    const loadSeq = audioLoadSeqRef.current + 1;
+    audioLoadSeqRef.current = loadSeq;
+    const isCurrentLoad = () => !canceled && audioLoadSeqRef.current === loadSeq;
+    let ownedBlobUrl = '';
     const loadSource = async () => {
       const audio = audioRef.current;
       if (!audio || !currentTrack || !electronAPI?.readAudioBuffer) return;
       sourceSwitchingRef.current = true;
+      setPlayError('');
       try {
         const raw = await electronAPI.readAudioBuffer(currentTrack.path);
-        if (canceled) return;
+        if (!isCurrentLoad()) return;
         if (!raw) {
           setPlayError('该歌曲无法读取或解码');
           setIsPlaying(false);
@@ -369,6 +376,7 @@ function App() {
             ? payload
             : new Uint8Array(payload);
         const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        ownedBlobUrl = blobUrl;
         const prevUrl = audio.dataset.blobUrl;
         if (prevUrl) URL.revokeObjectURL(prevUrl);
         audio.dataset.blobUrl = blobUrl;
@@ -388,24 +396,26 @@ function App() {
         );
         if (isPlaying) {
           await audio.play().catch(() => {
+            if (!isCurrentLoad()) return;
             setPlayError('当前格式暂不支持播放');
             setIsPlaying(false);
           });
         }
       } catch (_) {
+        if (!isCurrentLoad()) return;
         setPlayError('音频读取失败，请尝试重新扫描');
         setIsPlaying(false);
       } finally {
-        sourceSwitchingRef.current = false;
+        if (isCurrentLoad()) sourceSwitchingRef.current = false;
       }
     };
     loadSource();
     return () => {
+      audioLoadSeqRef.current += 1;
       const audio = audioRef.current;
-      const prevUrl = audio?.dataset?.blobUrl;
-      if (prevUrl) {
-        URL.revokeObjectURL(prevUrl);
-        if (audio) delete audio.dataset.blobUrl;
+      if (ownedBlobUrl) {
+        URL.revokeObjectURL(ownedBlobUrl);
+        if (audio?.dataset?.blobUrl === ownedBlobUrl) delete audio.dataset.blobUrl;
       }
       sourceSwitchingRef.current = false;
       canceled = true;
@@ -423,7 +433,9 @@ function App() {
     if (!audio) return;
     if (sourceSwitchingRef.current) return;
     if (isPlaying) {
+      const playSeq = audioLoadSeqRef.current;
       audio.play().catch(() => {
+        if (audioLoadSeqRef.current !== playSeq) return;
         setPlayError('当前格式暂不支持播放');
         setIsPlaying(false);
       });
@@ -585,7 +597,10 @@ function App() {
     };
   }, []);
 
-  const playTrack = (id) => {
+  const playTrack = (id, options = {}) => {
+    if (currentTrackId && currentTrackId !== id && options.recordHistory !== false) {
+      playHistoryRef.current = [...playHistoryRef.current, currentTrackId].slice(-100);
+    }
     setCurrentTrackId(id);
     setLyricAdjustMode(false);
     setHoldLyricIdx(null);
@@ -644,6 +659,16 @@ function App() {
     if (!currentTrackId) {
       playTrack(activePlayList[0].id);
       return;
+    }
+    if (playMode === 'random') {
+      const activeIds = new Set(activePlayList.map((track) => track.id));
+      while (playHistoryRef.current.length) {
+        const prevId = playHistoryRef.current.pop();
+        if (prevId && prevId !== currentTrackId && activeIds.has(prevId)) {
+          playTrack(prevId, { recordHistory: false });
+          return;
+        }
+      }
     }
     const idx = activePlayList.findIndex((t) => t.id === currentTrackId);
     if (idx < 0) {
@@ -1204,7 +1229,8 @@ function App() {
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime || 0)}
         onLoadedMetadata={(e) => setTrackDuration(e.currentTarget.duration || currentTrack?.duration || 0)}
         onEnded={playNext}
-        onError={() => {
+        onError={(e) => {
+          if (sourceSwitchingRef.current || !e.currentTarget.currentSrc) return;
           setPlayError('音频播放失败，请尝试 MP3/FLAC');
           setIsPlaying(false);
         }}
@@ -1671,15 +1697,15 @@ function App() {
                   </div>
                   <div className="flex items-center justify-end gap-2 flex-1">
                     <button
-                      className="rounded-md p-2 bg-black/5 dark:bg-white/10"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-black/5 dark:bg-white/10"
                       title={playMode === 'sequence' ? '顺序播放' : playMode === 'random' ? '随机播放' : '循环播放'}
                       onClick={() => setData((prev) => ({ ...prev, settings: { ...prev.settings, playMode: cyclePlayMode(prev.settings.playMode) } }))}
                     >
                       <PlayModeIcon size={16} />
                     </button>
-                    <button className={`rounded-md p-2 ${data.settings.showLyrics ? 'bg-[#007aff] text-white' : 'bg-black/5 dark:bg-white/10'}`} onClick={() => setData((prev) => ({ ...prev, settings: { ...prev.settings, showLyrics: !prev.settings.showLyrics } }))}>词</button>
+                    <button className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm leading-none ${data.settings.showLyrics ? 'bg-[#007aff] text-white' : 'bg-black/5 dark:bg-white/10'}`} onClick={() => setData((prev) => ({ ...prev, settings: { ...prev.settings, showLyrics: !prev.settings.showLyrics } }))}>词</button>
                     <button
-                      className={`rounded-md p-2 ${data.settings.lyricClickThrough ? 'bg-[#007aff] text-white' : 'bg-black/5 dark:bg-white/10'}`}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-sm leading-none ${data.settings.lyricClickThrough ? 'bg-[#007aff] text-white' : 'bg-black/5 dark:bg-white/10'}`}
                       onClick={() => setData((prev) => ({ ...prev, settings: { ...prev.settings, lyricClickThrough: !prev.settings.lyricClickThrough } }))}
                     >
                       穿
