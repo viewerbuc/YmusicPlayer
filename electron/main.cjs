@@ -356,6 +356,7 @@ function ensureDataShape(raw) {
       closeBehavior: 'ask',
       backgroundImagePath: '',
       backgroundBlur: 8,
+      listTextTone: 'auto',
       volume: 0.8,
       lyricEncodingMap: {}
     }

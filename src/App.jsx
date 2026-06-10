@@ -39,6 +39,7 @@ const DEFAULT_DATA = {
     closeBehavior: 'ask',
     backgroundImagePath: '',
     backgroundBlur: 8,
+    listTextTone: 'auto',
     volume: 0.8,
     lyricEncodingMap: {}
   }
@@ -334,6 +335,25 @@ function App() {
   const lyricsEnabled = !!currentTrack && isPlaying && data.settings.showLyrics && (!mini || data.settings.minimizedShowLyrics);
   const floatingLyricsEnabled = lyricsEnabled && !playerPanelOpen;
   const bgBlur = Number.isFinite(Number(data.settings.backgroundBlur)) ? Number(data.settings.backgroundBlur) : 8;
+  const listTextTone = ['auto', 'dark', 'light'].includes(data.settings.listTextTone) ? data.settings.listTextTone : 'auto';
+  const listTextClass = listTextTone === 'light'
+    ? 'text-white/90'
+    : listTextTone === 'dark'
+      ? 'text-black'
+      : 'text-black/85 dark:text-white/90';
+  const listMutedTextClass = listTextTone === 'light'
+    ? 'text-white/70'
+    : listTextTone === 'dark'
+      ? 'text-black/82'
+      : 'text-black/60 dark:text-white/60';
+  const listFaintTextClass = listTextTone === 'light'
+    ? 'text-white/58'
+    : listTextTone === 'dark'
+      ? 'text-black/68'
+      : 'text-black/45 dark:text-white/45';
+  const listAccentTextClass = listTextTone === 'auto'
+    ? 'text-[#0066d6] dark:text-[#9accff]'
+    : listMutedTextClass;
   const volume = Math.max(0, Math.min(1, Number.isFinite(Number(data.settings.volume)) ? Number(data.settings.volume) : 0.8));
   const lyricEncoding = currentTrackId ? (data.settings.lyricEncodingMap?.[currentTrackId] || 'auto') : 'auto';
   const adjustedLyricTime = time + lyricOffsetSec;
@@ -1140,7 +1160,7 @@ function App() {
       </section>
 
       <section className="overflow-hidden rounded-2xl bg-white/50 dark:bg-[#1e1e1e]/55 backdrop-blur-md border border-black/5 dark:border-white/10">
-        <div className="grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] px-3 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 border-b border-black/5 dark:border-white/10">
+        <div className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] px-3 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 border-b border-black/5 dark:border-white/10 ${listTextClass}`}>
           <span />
           <span>歌曲名</span>
           <span>作者</span>
@@ -1153,27 +1173,27 @@ function App() {
           return (
             <div
               key={item.key}
-              className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] items-center px-3 py-2 text-sm border-b border-black/5 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/8 apple-pointer ${
+              className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] items-center px-3 py-2 text-sm border-b border-black/5 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/8 apple-pointer ${listTextClass} ${
                 checked ? 'bg-[#007aff]/10 dark:bg-[#007aff]/18' : ''
               }`}
               onClick={() => toggleOnlineSelection(item.key)}
             >
               <input type="checkbox" checked={checked} readOnly className="mx-auto accent-[#007aff]" />
               <div className="min-w-0">
-                <div className="truncate font-medium">{item.song_name}</div>
-                <div className="truncate text-[11px] text-black/45 dark:text-white/45">
+                <div className={`truncate font-medium ${listTextClass}`}>{item.song_name}</div>
+                <div className={`truncate text-[11px] ${listFaintTextClass}`}>
                   {item.ext || 'audio'} · {item.duration || '-:-:-'} {item.has_lyric ? '· 有歌词' : ''}
                 </div>
               </div>
-              <div className="truncate text-black/62 dark:text-white/62">{item.singers}</div>
-              <div className="truncate text-black/55 dark:text-white/55">{item.album}</div>
-              <div className="text-right text-black/55 dark:text-white/55">{item.file_size}</div>
-              <div className="text-right pr-2 text-[#0066d6] dark:text-[#9accff]">{item.source_label || item.source}</div>
+              <div className={`truncate ${listMutedTextClass}`}>{item.singers}</div>
+              <div className={`truncate ${listMutedTextClass}`}>{item.album}</div>
+              <div className={`text-right ${listMutedTextClass}`}>{item.file_size}</div>
+              <div className={`text-right pr-2 ${listAccentTextClass}`}>{item.source_label || item.source}</div>
             </div>
           );
         })}
         {!onlineResults.length && (
-          <div className="py-16 text-center text-sm text-black/45 dark:text-white/45">
+          <div className={`py-16 text-center text-sm ${listFaintTextClass}`}>
             输入关键词后可从网易云、汽水、咪咕、QQ、酷我搜索并下载到本地曲库
           </div>
         )}
@@ -1186,7 +1206,7 @@ function App() {
     return (
       <div
         key={rowKey}
-        className={`relative grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] items-center px-2 py-1.5 text-sm border-b border-black/5 dark:border-white/10 even:bg-black/[0.02] dark:even:bg-white/[0.03] hover:bg-black/5 dark:hover:bg-white/10 apple-pointer select-none ${
+        className={`relative grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] items-center px-2 py-1.5 text-sm border-b border-black/5 dark:border-white/10 even:bg-black/[0.02] dark:even:bg-white/[0.03] hover:bg-black/5 dark:hover:bg-white/10 apple-pointer select-none ${listTextClass} ${
           isActive ? 'bg-[#007aff]/12 dark:bg-[#007aff]/22' : ''
         }`}
         onClick={() => playTrack(track.id)}
@@ -1207,9 +1227,9 @@ function App() {
         <Heart size={16} className={track.liked ? 'fill-red-500 text-red-500' : 'text-black/40 dark:text-white/40'} />
       </button>
       <div className={`truncate apple-pointer ${isActive ? 'text-[#0066d6] dark:text-[#86bcff] font-medium' : ''}`}>{track.title}</div>
-      <div className="truncate text-black/60 dark:text-white/60 apple-pointer">{track.artist}</div>
-      <div className="truncate text-black/60 dark:text-white/60 apple-pointer">{track.album}</div>
-      <div className="text-right text-black/60 dark:text-white/60 pr-2 apple-pointer">{formatDuration(track.duration)}</div>
+      <div className={`truncate apple-pointer ${listMutedTextClass}`}>{track.artist}</div>
+      <div className={`truncate apple-pointer ${listMutedTextClass}`}>{track.album}</div>
+      <div className={`text-right pr-2 apple-pointer ${listMutedTextClass}`}>{formatDuration(track.duration)}</div>
       </div>
     );
   };
@@ -1413,8 +1433,8 @@ function App() {
             </div>
 
             {!mini && (
-              <div className="apple-scroll flex-1 min-h-0 overflow-auto px-3 pb-40">
-                {view !== 'online' && <div className="sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/10">
+              <div className="apple-scroll flex-1 min-h-0 overflow-auto px-3 pb-56">
+                {view !== 'online' && <div className={`sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/10 ${listTextClass}`}>
                   <span className="text-center">喜欢</span>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'title'))}>歌曲名</button>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'artist'))}>作者</button>
@@ -1425,23 +1445,29 @@ function App() {
                 {view === 'songs' && displayTracks.map((track, idx) => renderRow(track, `songs-${track.id}-${idx}`))}
 
                 {view === 'artists' && groupedByArtist.map(([artist, tracks]) => (
-                  <section key={artist} className="mb-4 overflow-hidden rounded-xl bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.35)]">
-                    <div className="px-3 py-2 text-sm tracking-tight font-medium bg-black/[0.03] dark:bg-white/[0.04]">{artist} ({tracks.length})</div>
+                  <section key={artist}>
+                    <div className="mt-2 flex items-center gap-2 px-2 py-1 text-xs font-semibold tracking-wide text-black/50 dark:text-white/50">
+                      <span className="h-px w-3 bg-black/18 dark:bg-white/18" />
+                      <span className="min-w-0 truncate">{artist} ({tracks.length})</span>
+                      <span className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+                    </div>
                     {tracks.map((track, idx) => renderRow(track, `artists-${artist}-${track.id}-${idx}`))}
                   </section>
                 ))}
 
                 {view === 'folders' && groupedByFolder.map(([folder, tracks]) => (
-                  <section key={folder} className="mb-4 overflow-hidden rounded-2xl bg-white/50 dark:bg-[#1e1e1e]/50 backdrop-blur-md border border-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.35)]">
-                    <div className="px-3 py-2 text-sm tracking-tight font-medium bg-black/[0.03] dark:bg-white/[0.04] border-b border-black/5 dark:border-white/10 truncate">
-                      {folder}
+                  <section key={folder}>
+                    <div className="mt-2 flex items-center gap-2 px-2 py-1 text-xs font-semibold tracking-wide text-black/50 dark:text-white/50">
+                      <span className="h-px w-3 bg-black/18 dark:bg-white/18" />
+                      <span className="min-w-0 truncate">{folder} ({tracks.length})</span>
+                      <span className="h-px flex-1 bg-black/10 dark:bg-white/10" />
                     </div>
                     {tracks.map((track, idx) => renderRow(track, `folders-${folder}-${track.id}-${idx}`))}
                   </section>
                 ))}
                 {view === 'online' && renderOnlineDownloadPanel()}
                 {view !== 'online' && displayTracks.length === 0 && (
-                  <div className="py-16 text-center text-sm text-black/45 dark:text-white/45">
+                  <div className={`py-16 text-center text-sm ${listFaintTextClass}`}>
                     没有匹配歌曲，请按歌曲名或歌手名搜索
                   </div>
                 )}
@@ -1848,6 +1874,38 @@ function App() {
                       className="h-1.5 flex-1 appearance-none rounded-full bg-black/10 dark:bg-white/15 accent-[#007aff]"
                     />
                     <span className="text-xs text-black/60 dark:text-white/70 w-8 text-right">{bgBlur}</span>
+                  </div>
+                </section>
+
+                <section className="rounded-xl p-3 bg-black/[0.03] dark:bg-white/[0.06]">
+                  <div className="mb-1 text-xs text-black/60 dark:text-white/70">列表文字</div>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      ['auto', '跟随主题'],
+                      ['dark', '深色文字'],
+                      ['light', '浅色文字']
+                    ].map(([value, label]) => {
+                      const active = listTextTone === value;
+                      return (
+                        <button
+                          key={value}
+                          className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                            active
+                              ? 'bg-[#007aff] text-white'
+                              : 'bg-black/5 dark:bg-white/10 text-black/75 dark:text-white/80 hover:bg-black/10 dark:hover:bg-white/15'
+                          }`}
+                          onClick={() => setData((prev) => ({
+                            ...prev,
+                            settings: { ...prev.settings, listTextTone: value }
+                          }))}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 text-[11px] text-black/50 dark:text-white/55">
+                    “跟随主题”保持原来的列表文字效果；背景太亮可选深色文字，背景太暗可选浅色文字。
                   </div>
                 </section>
 
