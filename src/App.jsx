@@ -37,6 +37,7 @@ const DEFAULT_DATA = {
     lyricLocked: false,
     lyricClickThrough: false,
     closeBehavior: 'ask',
+    theme: 'dark',
     backgroundImagePath: '',
     backgroundBlur: 8,
     listTextTone: 'auto',
@@ -146,7 +147,7 @@ function toMixedSortKey(value) {
 function App() {
   const [data, setData] = useState(DEFAULT_DATA);
   const [loaded, setLoaded] = useState(false);
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(DEFAULT_DATA.settings.theme === 'dark');
   const [view, setView] = useState('songs');
   const [playlistId, setPlaylistId] = useState('all');
   const [sort, setSort] = useState({ key: 'title', dir: 'asc' });
@@ -199,6 +200,12 @@ function App() {
     document.documentElement.classList.toggle('dark', dark);
   }, [dark]);
 
+  const toggleTheme = () => {
+    const nextTheme = dark ? 'light' : 'dark';
+    setDark(nextTheme === 'dark');
+    setData((prev) => ({ ...prev, settings: { ...prev.settings, theme: nextTheme } }));
+  };
+
   useEffect(() => {
     const load = async () => {
       if (!electronAPI) {
@@ -207,6 +214,7 @@ function App() {
       }
       const saved = await electronAPI.loadData();
       setData(saved);
+      setDark((saved.settings?.theme || DEFAULT_DATA.settings.theme) === 'dark');
       setLoaded(true);
     };
     load();
@@ -354,7 +362,7 @@ function App() {
   const listAccentTextClass = listTextTone === 'auto'
     ? 'text-[#0066d6] dark:text-[#9accff]'
     : listMutedTextClass;
-  const listHeaderClass = 'text-black/55 dark:text-white/60';
+  const listHeaderClass = 'font-semibold text-black/85 dark:text-white/95';
   const volume = Math.max(0, Math.min(1, Number.isFinite(Number(data.settings.volume)) ? Number(data.settings.volume) : 0.8));
   const lyricEncoding = currentTrackId ? (data.settings.lyricEncodingMap?.[currentTrackId] || 'auto') : 'auto';
   const adjustedLyricTime = time + lyricOffsetSec;
@@ -1160,8 +1168,8 @@ function App() {
         )}
       </section>
 
-      <section className="overflow-hidden rounded-2xl bg-white/50 dark:bg-[#1e1e1e]/55 backdrop-blur-md border border-black/5 dark:border-white/10">
-        <div className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] px-3 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 border-b border-black/5 dark:border-white/10 ${listHeaderClass}`}>
+      <section className="overflow-hidden rounded-2xl bg-white/70 dark:bg-[#1e1e1e]/80 backdrop-blur-md border border-black/5 dark:border-white/10">
+        <div className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] px-3 py-2 text-xs tracking-wide uppercase bg-[rgba(226,232,238,0.88)] dark:bg-[rgba(48,56,64,0.94)] border-b border-black/5 dark:border-white/10 ${listHeaderClass}`}>
           <span />
           <span>歌曲名</span>
           <span>作者</span>
@@ -1257,7 +1265,7 @@ function App() {
         }}
       />
 
-      <div className="relative h-full w-full rounded-[8px] bg-white/80 dark:bg-[#282828]/70 backdrop-blur-3xl shadow-[0px_14px_30px_-10px_rgba(0,0,0,0.16)] noise-layer overflow-hidden">
+      <div className={`relative h-full w-full ${isWindowMaximized ? 'rounded-none' : 'rounded-[10px]'} app-window-shell shadow-[0px_14px_30px_-10px_rgba(0,0,0,0.16)] noise-layer overflow-hidden`}>
         {!!bgDataUrl && (
           <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
             <div
@@ -1279,7 +1287,7 @@ function App() {
           <aside className="relative flex min-h-0 flex-col p-4 bg-white/20 dark:bg-black/22 backdrop-blur-2xl border-r border-black/5 dark:border-white/10">
             <div className="mb-2 no-drag flex items-center gap-2 text-xs shrink-0">
               <button onClick={() => setSettingsOpen(true)} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10" title="设置"><Settings2 size={16} /></button>
-              <button onClick={() => setDark((v) => !v)} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10" title="主题">
+              <button onClick={toggleTheme} className="no-drag rounded-md p-1.5 bg-black/5 dark:bg-white/10" title="主题">
                 {dark ? <Sun size={16} /> : <Moon size={16} />}
               </button>
             </div>
@@ -1435,7 +1443,7 @@ function App() {
 
             {!mini && (
               <div className="apple-scroll flex-1 min-h-0 overflow-auto px-3 pb-56">
-                {view !== 'online' && <div className={`sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/10 ${listHeaderClass}`}>
+                {view !== 'online' && <div className={`sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-[rgba(226,232,238,0.88)] dark:bg-[rgba(48,56,64,0.94)] border-b border-black/5 dark:border-white/10 ${listHeaderClass}`}>
                   <span className="text-center">喜欢</span>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'title'))}>歌曲名</button>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'artist'))}>作者</button>
@@ -1705,24 +1713,24 @@ function App() {
             </AnimatePresence>
 
             <div className="absolute bottom-0 inset-x-0 px-4 pb-4">
-              <div className="rounded-xl bg-white/90 dark:bg-[#323232]/90 backdrop-blur-xl shadow-2xl shadow-black/20 p-3">
-                <div className="flex items-center justify-between gap-4">
+              <div className="rounded-xl bg-white/90 dark:bg-[#323232]/90 backdrop-blur-xl shadow-2xl shadow-black/20 px-3 py-2.5">
+                <div className="flex items-center justify-between gap-3">
                   <button
-                    className="min-w-0 flex-1 text-left rounded-lg px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                    className="min-w-0 flex-[1.25] text-left rounded-lg px-2 py-0.5 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
                     onClick={() => {
                       if (currentTrack) setPlayerPanelOpen((v) => !v);
                     }}
                     title="打开正在播放详情"
                   >
-                    <div className="truncate text-sm tracking-tight">{currentTrack?.title || '未选择歌曲'}</div>
-                    <div className="truncate text-xs text-black/50 dark:text-white/50">{currentTrack ? `${currentTrack.artist} · ${currentTrack.album}` : '扫描本地文件夹开始播放'}</div>
+                    <div className="truncate text-[16px] leading-tight tracking-tight font-medium">{currentTrack?.title || '未选择歌曲'}</div>
+                    <div className="mt-0.5 truncate text-[11px] leading-tight text-black/52 dark:text-white/52">{currentTrack ? `${currentTrack.artist} · ${currentTrack.album}` : '扫描本地文件夹开始播放'}</div>
                   </button>
-                  <div className="flex items-center justify-center gap-3 flex-1">
+                  <div className="flex items-center justify-center gap-2.5 flex-[0.95] min-w-0">
                     <button className="rounded-xl p-3.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15" onClick={playPrev}><SkipBack size={26} /></button>
                     <motion.button whileTap={{ scale: 0.96 }} transition={SPRING} className="rounded-xl px-6 py-3.5 bg-gradient-to-b from-blue-500 to-blue-600 text-white shadow-sm border border-white/20" onClick={() => (currentTrack ? setIsPlaying((v) => !v) : sortedTracks[0] && playTrack(sortedTracks[0].id))}>{isPlaying ? <Pause size={28} /> : <Play size={28} />}</motion.button>
                     <button className="rounded-xl p-3.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15" onClick={playNext}><SkipForward size={26} /></button>
                   </div>
-                  <div className="flex items-center justify-end gap-2 flex-1">
+                  <div className="flex items-center justify-end gap-2 flex-1 min-w-0">
                     <button
                       className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-black/5 dark:bg-white/10"
                       title={playMode === 'sequence' ? '顺序播放' : playMode === 'random' ? '随机播放' : '循环播放'}

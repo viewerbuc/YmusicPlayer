@@ -14,19 +14,27 @@ html, body, #root {
   overflow: hidden;
 }
 
+html,
+body {
+  background: transparent;
+}
+
 body {
   margin: 0;
+}
+
+.app-window-shell {
   background:
     radial-gradient(1200px 600px at 10% -20%, rgba(130, 170, 255, 0.22), transparent 60%),
     radial-gradient(1000px 500px at 100% 0%, rgba(152, 218, 255, 0.2), transparent 60%),
-    linear-gradient(180deg, #f4f6fb 0%, #e9edf5 100%);
+    linear-gradient(180deg, rgba(244, 246, 251, 0.96) 0%, rgba(233, 237, 245, 0.96) 100%);
 }
 
-.dark body {
+.dark .app-window-shell {
   background:
     radial-gradient(1000px 500px at 10% -20%, rgba(52, 83, 141, 0.28), transparent 60%),
     radial-gradient(1200px 600px at 100% 0%, rgba(32, 60, 118, 0.26), transparent 62%),
-    linear-gradient(180deg, #101218 0%, #0a0d12 100%);
+    linear-gradient(180deg, rgba(16, 18, 24, 0.96) 0%, rgba(10, 13, 18, 0.96) 100%);
 }
 
 .noise-layer::before {

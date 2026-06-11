@@ -354,6 +354,7 @@ function ensureDataShape(raw) {
       lyricLocked: false,
       lyricClickThrough: false,
       closeBehavior: 'ask',
+      theme: 'dark',
       backgroundImagePath: '',
       backgroundBlur: 8,
       listTextTone: 'auto',
@@ -632,8 +633,9 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 700,
     frame: false,
+    transparent: true,
     autoHideMenuBar: true,
-    backgroundColor: '#101218',
+    backgroundColor: '#00000000',
     icon: appIconPath,
     vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
     webPreferences: {
