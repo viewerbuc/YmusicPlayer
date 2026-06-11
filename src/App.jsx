@@ -354,6 +354,7 @@ function App() {
   const listAccentTextClass = listTextTone === 'auto'
     ? 'text-[#0066d6] dark:text-[#9accff]'
     : listMutedTextClass;
+  const listHeaderClass = 'text-black/55 dark:text-white/60';
   const volume = Math.max(0, Math.min(1, Number.isFinite(Number(data.settings.volume)) ? Number(data.settings.volume) : 0.8));
   const lyricEncoding = currentTrackId ? (data.settings.lyricEncodingMap?.[currentTrackId] || 'auto') : 'auto';
   const adjustedLyricTime = time + lyricOffsetSec;
@@ -1160,7 +1161,7 @@ function App() {
       </section>
 
       <section className="overflow-hidden rounded-2xl bg-white/50 dark:bg-[#1e1e1e]/55 backdrop-blur-md border border-black/5 dark:border-white/10">
-        <div className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] px-3 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 border-b border-black/5 dark:border-white/10 ${listTextClass}`}>
+        <div className={`grid grid-cols-[44px_2fr_1.2fr_1.1fr_88px_96px] px-3 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 border-b border-black/5 dark:border-white/10 ${listHeaderClass}`}>
           <span />
           <span>歌曲名</span>
           <span>作者</span>
@@ -1434,7 +1435,7 @@ function App() {
 
             {!mini && (
               <div className="apple-scroll flex-1 min-h-0 overflow-auto px-3 pb-56">
-                {view !== 'online' && <div className={`sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/10 ${listTextClass}`}>
+                {view !== 'online' && <div className={`sticky top-0 z-10 grid grid-cols-[48px_2fr_1.2fr_1.2fr_90px] px-2 py-2 text-xs tracking-wide uppercase bg-white/70 dark:bg-[#2a2a2a]/80 backdrop-blur-xl border-b border-black/5 dark:border-white/10 ${listHeaderClass}`}>
                   <span className="text-center">喜欢</span>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'title'))}>歌曲名</button>
                   <button className="text-left apple-pointer" onClick={() => setSort((s) => nextSort(s, 'artist'))}>作者</button>
