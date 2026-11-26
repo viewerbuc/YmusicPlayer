@@ -40,7 +40,8 @@ for (const python of candidatePythonCommands()) {
   const result = spawnSync(python, [
     '-m', 'PyInstaller',
     '--clean',
-    '--onefile',
+    '--noconfirm',
+    '--onedir',
     '--name', exeName.replace(/\.exe$/i, ''),
     '--distpath', distPath,
     '--workpath', buildPath,

@@ -41,11 +41,14 @@
         box-shadow: none;
         transition: all 180ms ease-out;
       }
-      .panel:hover {
+      .panel:not(.is-passive):hover {
         border-color: rgba(255, 255, 255, 0.2);
         background: rgba(35, 35, 35, 0.4);
         backdrop-filter: blur(22px) saturate(150%);
         box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 12px 24px rgba(0,0,0,.2);
+      }
+      .panel.is-locked {
+        -webkit-app-region: no-drag;
       }
       .min-btn {
         position: absolute;
@@ -64,7 +67,7 @@
         opacity: 0;
         transition: opacity 180ms ease-out, background 180ms ease-out;
       }
-      .panel:hover .min-btn {
+      .panel:not(.is-passive):hover .min-btn {
         opacity: 1;
       }
       .min-btn:hover {
@@ -110,6 +113,7 @@
       </div>
     </div>
     <script>
+      const panel = document.getElementById('panel');
       const line1 = document.getElementById('line1');
       const line2 = document.getElementById('line2');
       const empty = document.getElementById('empty');
@@ -117,6 +121,13 @@
 
       minBtn?.addEventListener('click', () => {
         window.lyricAPI?.minimizeWindow?.();
+      });
+
+      window.lyricAPI?.onOptions?.((options) => {
+        const locked = !!options?.locked;
+        const clickThrough = !!options?.clickThrough;
+        panel?.classList.toggle('is-locked', locked || clickThrough);
+        panel?.classList.toggle('is-passive', clickThrough);
       });
 
       window.lyricAPI?.onUpdate((payload) => {

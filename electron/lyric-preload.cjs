@@ -6,5 +6,10 @@ contextBridge.exposeInMainWorld('lyricAPI', {
     ipcRenderer.on('lyrics:update', handler);
     return () => ipcRenderer.removeListener('lyrics:update', handler);
   },
+  onOptions: (cb) => {
+    const handler = (_, options) => cb(options || {});
+    ipcRenderer.on('lyrics:options', handler);
+    return () => ipcRenderer.removeListener('lyrics:options', handler);
+  },
   minimizeWindow: () => ipcRenderer.invoke('lyrics:minimizeFromWindow')
 });

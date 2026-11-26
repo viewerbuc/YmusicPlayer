@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import concurrent.futures
 import contextlib
 import io
 import json
 import os
+import re
 import sys
+import threading
 import traceback
 from pathlib import Path
 
-from pathvalidate import sanitize_filename
 
+REAL_STDOUT = sys.__stdout__ or sys.stdout
+EMIT_LOCK = threading.Lock()
 
 SUPPORTED_SOURCES = {
     "NeteaseMusicClient": "网易云音乐",
@@ -30,6 +34,16 @@ SOURCE_ALIASES = {
     "qq": "QQMusicClient",
     "kuwo": "KuwoMusicClient",
 }
+
+
+def safe_filename(value: str) -> str:
+    try:
+        from pathvalidate import sanitize_filename
+        return sanitize_filename(value, replacement_text=" ").strip()
+    except Exception:
+        cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", str(value or ""))
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+        return cleaned
 
 
 def add_import_paths():
@@ -55,7 +69,9 @@ def add_import_paths():
 
     for candidate in candidates:
         if candidate.exists():
-            sys.path.insert(0, str(candidate))
+            candidate_str = str(candidate)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
 
 
 def ensure_writable_app_dirs():
@@ -83,8 +99,15 @@ def load_musicdl_modules():
     return musicdl_module, SongInfo
 
 
+def emit_line(payload):
+    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    with EMIT_LOCK:
+        REAL_STDOUT.write(line + "\n")
+        REAL_STDOUT.flush()
+
+
 def emit(payload, exit_code=0):
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    emit_line(payload)
     raise SystemExit(exit_code)
 
 
@@ -187,21 +210,98 @@ def command_sources(_args):
     })
 
 
+def search_single_source(musicdl_module, source, keyword, work_dir, limit_per_source):
+    source_label = SUPPORTED_SOURCES.get(source, source)
+    emit_line({
+        "type": "source_start",
+        "source": source,
+        "source_label": source_label,
+    })
+    try:
+        client = make_client(musicdl_module, [source], work_dir, limit_per_source)
+        raw_results = client.search(keyword=keyword) or {}
+        items = raw_results.get(source, []) or []
+        results = [compact_song_info(song_info, idx) for idx, song_info in enumerate(items)]
+        emit_line({
+            "type": "source_result",
+            "ok": True,
+            "source": source,
+            "source_label": source_label,
+            "results": results,
+        })
+        return {"ok": True, "source": source, "source_label": source_label, "results": results}
+    except Exception as err:
+        error_msg = str(err)
+        emit_line({
+            "type": "source_error",
+            "ok": False,
+            "source": source,
+            "source_label": source_label,
+            "error": error_msg,
+        })
+        return {"ok": False, "source": source, "source_label": source_label, "error": error_msg}
+
+
 def command_search(args):
     try:
         musicdl_module, _SongInfo = load_musicdl_modules()
         sources = parse_sources(args.sources)
         work_dir = str(Path(args.work_dir).expanduser().resolve()) if args.work_dir else str(Path.cwd() / "musicdl_outputs")
+        limit_per_source = max(1, args.limit_per_source)
+
+        if getattr(args, "stream", False):
+            results_by_source = {}
+            errors = []
+            logs = ""
+            with capture_console() as (stdout_buffer, stderr_buffer):
+                max_workers = min(3, max(1, len(sources)))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            search_single_source,
+                            musicdl_module,
+                            source,
+                            args.keyword,
+                            work_dir,
+                            limit_per_source,
+                        ): source
+                        for source in sources
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        outcome = future.result()
+                        if outcome.get("ok"):
+                            results_by_source[outcome["source"]] = outcome.get("results") or []
+                        else:
+                            errors.append({
+                                "source": outcome["source"],
+                                "sourceLabel": outcome["source_label"],
+                                "error": outcome.get("error") or "搜索失败",
+                            })
+                logs = stdout_buffer.getvalue() + stderr_buffer.getvalue()
+
+            ordered_results = []
+            for source in sources:
+                ordered_results.extend(results_by_source.get(source, []))
+            emit({
+                "ok": len(ordered_results) > 0 or len(errors) < len(sources),
+                "type": "done",
+                "results": ordered_results,
+                "errors": errors,
+                "logs": logs[-4000:],
+            })
+
         logs = ""
         with capture_console() as (stdout_buffer, stderr_buffer):
-            client = make_client(musicdl_module, sources, work_dir, max(1, args.limit_per_source))
+            client = make_client(musicdl_module, sources, work_dir, limit_per_source)
             raw_results = client.search(keyword=args.keyword)
             logs = stdout_buffer.getvalue() + stderr_buffer.getvalue()
         results = []
         for source in sources:
-            for song_info in raw_results.get(source, []) or []:
-                results.append(compact_song_info(song_info, len(results)))
+            for idx, song_info in enumerate(raw_results.get(source, []) or []):
+                results.append(compact_song_info(song_info, idx))
         emit({"ok": True, "results": results, "logs": logs[-4000:]})
+    except SystemExit:
+        raise
     except Exception as err:
         emit({"ok": False, "error": str(err), "traceback": traceback.format_exc()}, 1)
 
@@ -257,8 +357,9 @@ def first_artist_name(singers):
 
 
 def build_save_stem(song_info):
-    artist = sanitize_filename(first_artist_name(getattr(song_info, "singers", "")), replacement_text=" ").strip() or "Unknown Artist"
-    song_name = sanitize_filename(str(getattr(song_info, "song_name", "") or "Unknown Song"), replacement_text=" ").strip() or "Unknown Song"
+    add_import_paths()
+    artist = safe_filename(first_artist_name(getattr(song_info, "singers", ""))) or "Unknown Artist"
+    song_name = safe_filename(str(getattr(song_info, "song_name", "") or "Unknown Song")) or "Unknown Song"
     return f"{artist} - {song_name}"
 
 
@@ -312,6 +413,8 @@ def command_download(args):
             "target_dir": str(target_dir),
             "logs": logs[-4000:],
         })
+    except SystemExit:
+        raise
     except Exception as err:
         emit({"ok": False, "error": str(err), "traceback": traceback.format_exc()}, 1)
 
@@ -327,6 +430,7 @@ def main():
     search_parser.add_argument("--sources", default=",".join(SUPPORTED_SOURCES.keys()))
     search_parser.add_argument("--work-dir", default="")
     search_parser.add_argument("--limit-per-source", type=int, default=15)
+    search_parser.add_argument("--stream", action="store_true")
 
     download_parser = subparsers.add_parser("download")
     download_parser.add_argument("--target-dir", default="")

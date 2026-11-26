@@ -71,7 +71,7 @@
         <button id="reload" class="btn" title="刷新">⟳</button>
         <div id="url" class="url">https://www.toomic.com/</div>
       </div>
-      <webview id="view" src="https://www.toomic.com/" allowpopups></webview>
+      <webview id="view" partition="persist:lyric-finder"></webview>
     </div>
     <script>
       const view = document.getElementById('view');
@@ -80,39 +80,63 @@
       const reloadBtn = document.getElementById('reload');
       const urlNode = document.getElementById('url');
 
+      const params = new URLSearchParams(window.location.search);
+      const initialUrl = params.get('url') || 'https://www.toomic.com/';
+      let domReady = false;
+      let pendingUrl = '';
+
+      urlNode.textContent = initialUrl;
+      view.setAttribute('src', initialUrl);
+
       const syncNavState = () => {
-        backBtn.disabled = !view.canGoBack();
-        forwardBtn.disabled = !view.canGoForward();
-        const currentUrl = view.getURL?.() || view.src || '';
-        urlNode.textContent = currentUrl || 'about:blank';
+        if (!domReady) return;
+        try {
+          backBtn.disabled = !view.canGoBack();
+          forwardBtn.disabled = !view.canGoForward();
+          const currentUrl = view.getURL?.() || view.getAttribute('src') || '';
+          urlNode.textContent = currentUrl || 'about:blank';
+        } catch (_) {
+          backBtn.disabled = true;
+          forwardBtn.disabled = true;
+        }
       };
 
+      backBtn.disabled = true;
+      forwardBtn.disabled = true;
+
       backBtn.addEventListener('click', () => {
-        if (view.canGoBack()) view.goBack();
+        if (domReady && view.canGoBack()) view.goBack();
       });
       forwardBtn.addEventListener('click', () => {
-        if (view.canGoForward()) view.goForward();
+        if (domReady && view.canGoForward()) view.goForward();
       });
       reloadBtn.addEventListener('click', () => {
-        view.reload();
+        if (domReady) view.reload();
       });
 
+      view.addEventListener('dom-ready', () => {
+        domReady = true;
+        if (pendingUrl) {
+          const next = pendingUrl;
+          pendingUrl = '';
+          view.loadURL(next);
+        }
+        syncNavState();
+      });
       view.addEventListener('did-start-loading', syncNavState);
       view.addEventListener('did-stop-loading', syncNavState);
       view.addEventListener('did-navigate', syncNavState);
       view.addEventListener('did-navigate-in-page', syncNavState);
-      view.addEventListener('new-window', (e) => {
-        if (!e?.url) return;
-        e.preventDefault?.();
-        view.loadURL(e.url);
-      });
 
       window.lyricFinderAPI?.onOpenUrl((url) => {
         if (!url) return;
-        view.loadURL(url);
+        urlNode.textContent = url;
+        if (domReady) {
+          view.loadURL(url);
+        } else {
+          pendingUrl = url;
+        }
       });
-
-      syncNavState();
     </script>
   </body>
 </html>
